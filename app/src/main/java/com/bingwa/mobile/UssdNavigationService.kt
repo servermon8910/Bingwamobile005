@@ -3277,7 +3277,7 @@ class UssdNavigationService : AccessibilityService() {
 
     private fun buildStepAdvanceSignatureKey(root: AccessibilityNodeInfo, text: String, snapshot: UssdTreeSnapshot?): String {
         val cls = root.className?.toString().orEmpty()
-        val flags = snapshot?.let { "${it.hasEditableField}|${it.hasSendButton}|${it.hasDismissButton}" }.orEmpty()
+        val flags = snapshot?.let { "${it.hasEditableField}|${it.hasSendButton}|${it.hasDismissButton}|${it.inputStateSignature}" }.orEmpty()
         val menuFingerprint = snapshot?.let { parseMenuFromSnapshot(it) }?.entries?.joinToString(";") { "${it.key}:${normalizeMenuText(it.value)}" }.orEmpty()
         val stepFingerprint = "$currentStep|${normalizeInputValue(pendingExpectedValue)}"
         return "$stepFingerprint|${root.windowId}|${root.packageName?.toString().orEmpty()}|$cls|$flags|${normalizeCollapsedText(text)}|$menuFingerprint"

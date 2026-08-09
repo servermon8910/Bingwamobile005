@@ -410,7 +410,11 @@ class UssdNavigationService : AccessibilityService() {
                         captureLearningDialogIfNeeded(snapshot, root, windowPkg)
                     }
 
-                    if (shouldWaitForStepTransition(dialogText, windowId, root, snapshot)) return
+                    if (pendingStepAdvanceFromKey.isNotBlank()) {
+                        if (handlePendingStepAdvance(windowId, windowPkg, root, snapshot, dialogText)) return
+                    } else if (shouldWaitForStepTransition(dialogText, windowId, root, snapshot)) {
+                        return
+                    }
 
                     if (errorKeywords.any { lower.contains(it) }) {
                         if (signatureLearningMode && currentStep >= advancedSteps.size) {
@@ -429,11 +433,7 @@ class UssdNavigationService : AccessibilityService() {
                         isProcessing = false
                         scheduleProcessStep(false, RAPID_POST_POPUP_POLL_MS)
                         return
-                    }
-
-                    if (pendingStepAdvanceFromKey.isNotBlank() && handlePendingStepAdvance(windowId, windowPkg, root, snapshot, dialogText)) {
-                        return
-                    }
+                     }
 
                     val dialogChanged = windowId != previousWindowId || dialogText != lastDialogText
                     lastDialogText = dialogText
@@ -1296,6 +1296,14 @@ class UssdNavigationService : AccessibilityService() {
             }
             val currentKey = buildStepAdvanceSignatureKey(root, dialogText, snapshot)
             if (currentKey == fromKey) {
+                val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
+                val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
+                if (elapsed > 80L && looksReady) {
+                    clearPendingStepAdvance()
+                    advanceStep()
+                    scheduleProcessStep(true)
+                    return true
+                }
                 schedulePendingStepAdvanceKick()
                 return true
             }
@@ -1351,7 +1359,17 @@ class UssdNavigationService : AccessibilityService() {
             if (dialogText.isBlank()) { schedulePendingStepAdvanceKick(); isProcessing = false; return }
             val currentKey = buildStepAdvanceSignatureKey(root, dialogText, snapshot)
             if (currentKey == fromKey) {
-                schedulePendingStepAdvanceKick(); isProcessing = false; return
+                val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
+                val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
+                if (elapsed > 80L && looksReady) {
+                    clearPendingStepAdvance()
+                    advanceStep()
+                    scheduleProcessStep(true)
+                } else {
+                    schedulePendingStepAdvanceKick()
+                }
+                isProcessing = false
+                return
             }
             val expected = pendingExpectedValue ?: ""
             val verified = expected.isBlank() || verifyExpectedInput(root, expected)

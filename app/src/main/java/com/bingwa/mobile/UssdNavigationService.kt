@@ -1161,6 +1161,15 @@ class UssdNavigationService : AccessibilityService() {
         }
         try {
             if (shouldAdvanceFromChangedPendingPopup(interactionRoot, expected)) {
+                val snapshot = capturePreferredPopupSnapshot(interactionRoot, shouldRequireStrictPopupScope())
+                val dialogText = snapshot?.dialogText ?: normalizeCollapsedText(extractAllText(interactionRoot))
+                val lower = dialogText.lowercase()
+                if (errorKeywords.any { lower.contains(it) }) {
+                    clearPendingAdvance()
+                    isProcessing = false
+                    dismissErrorAndRestart()
+                    return
+                }
                 clearPendingAdvance(); advanceStep(); scheduleProcessStep(true); return
             }
 
@@ -1295,10 +1304,12 @@ class UssdNavigationService : AccessibilityService() {
                 clearPendingStepAdvance(); isProcessing = false; dismissErrorAndRestart(); return true
             }
             val currentKey = buildStepAdvanceSignatureKey(root, dialogText, snapshot)
+            val lower = dialogText.lowercase()
+            val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
                 val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
                 val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (elapsed > 80L && looksReady) {
+                if (elapsed > 80L && looksReady && !hasError) {
                     clearPendingStepAdvance()
                     advanceStep()
                     scheduleProcessStep(true)
@@ -1306,6 +1317,11 @@ class UssdNavigationService : AccessibilityService() {
                 }
                 schedulePendingStepAdvanceKick()
                 return true
+            }
+            if (hasError) {
+                clearPendingStepAdvance()
+                isProcessing = false
+                return false
             }
             clearPendingStepAdvance()
             advanceStep()
@@ -1358,16 +1374,23 @@ class UssdNavigationService : AccessibilityService() {
             val dialogText = snapshot?.dialogText ?: normalizeCollapsedText(extractAllText(root))
             if (dialogText.isBlank()) { schedulePendingStepAdvanceKick(); isProcessing = false; return }
             val currentKey = buildStepAdvanceSignatureKey(root, dialogText, snapshot)
+            val lower = dialogText.lowercase()
+            val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
                 val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
                 val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (elapsed > 80L && looksReady) {
+                if (elapsed > 80L && looksReady && !hasError) {
                     clearPendingStepAdvance()
                     advanceStep()
                     scheduleProcessStep(true)
                 } else {
                     schedulePendingStepAdvanceKick()
                 }
+                isProcessing = false
+                return
+            }
+            if (hasError) {
+                clearPendingStepAdvance()
                 isProcessing = false
                 return
             }

@@ -176,6 +176,7 @@ class UssdNavigationService : AccessibilityService() {
     // Step timeouts
     private var stepTimeoutRunnable: Runnable? = null
     private var processStepRunnable: Runnable? = null
+    private var foregroundWatchdogRunnable: Runnable? = null
 
     // Input write markers
     private var lastInputWriteValue = ""
@@ -272,6 +273,7 @@ class UssdNavigationService : AccessibilityService() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
         try { createNotificationChannel() } catch (e: Throwable) { Log.e(TAG, "createNotificationChannel failed", e) }
         try { startForegroundCompat() } catch (e: Throwable) { Log.e(TAG, "startForegroundCompat failed", e) }
+        scheduleForegroundWatchdog()
         if (pendingArm) {
             pendingArm = false
             handler.post { handleAdvancedSessionArmed() }
@@ -311,6 +313,7 @@ class UssdNavigationService : AccessibilityService() {
 
     override fun onDestroy() {
         try {
+            serviceActive = false
             super.onDestroy()
             stopForegroundCompat()
             bgThread.quitSafely()
@@ -1576,24 +1579,19 @@ class UssdNavigationService : AccessibilityService() {
 
     private fun setTextOnNode(node: AccessibilityNodeInfo, value: String): Boolean {
         if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
-        if (runCatching {
-                node.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_TEXT,
-                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
-                )
-            }.getOrDefault(false)
-        ) {
-            collapseInputSelection(node, value)
-            if (isLikelyDirectWriteVerified(node, value)) return true
-        }
-        // fallback: clear and retry
         runCatching {
             node.performAction(
                 AccessibilityNodeInfo.ACTION_SET_TEXT,
                 Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
             )
         }
-        return reinforceTextWrite(node, value)
+        SystemClock.sleep(lowEndDelay(SETTLE_BETWEEN_WRITE_PASSES_MS))
+        return runCatching {
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
+                )
+            }.getOrDefault(false)
     }
 
     private fun reinforceTextWrite(node: AccessibilityNodeInfo, value: String): Boolean {
@@ -2029,7 +2027,7 @@ class UssdNavigationService : AccessibilityService() {
         val a = normalizeInputValue(actual)
         val e = normalizeInputValue(expected)
         if (a.isBlank() || e.isBlank()) return false
-        if (a == e || (a.length > e.length && a.startsWith(e))) return true
+        if (a == e) return true
         if (isLikelyMaskedInput(a, e)) return true
         if (isLikelyMaskedInput(e, a)) return true
         val aPhone = normalizePhoneComparable(actual)
@@ -3034,6 +3032,8 @@ class UssdNavigationService : AccessibilityService() {
         pendingStepAdvanceKickRunnable = null
         uiKeepVisibleRunnable?.let { handler.removeCallbacks(it) }
         uiKeepVisibleRunnable = null
+        foregroundWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        foregroundWatchdogRunnable = null
         currentStep = 0
         advancedSteps = emptyList()
         advancedPhoneNumber = ""
@@ -3611,6 +3611,20 @@ class UssdNavigationService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else stopForeground(true)
     }
+
+    private var serviceActive = true
+
+    private fun scheduleForegroundWatchdog() {
+        foregroundWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        val task = Runnable {
+            if (!serviceActive) return@Runnable
+            runCatching { startForegroundCompat() }
+            foregroundWatchdogRunnable = null
+            scheduleForegroundWatchdog()
+        }
+        foregroundWatchdogRunnable = task
+        handler.postDelayed(task, FOREGROUND_WATCHDOG_INTERVAL_MS)
+    }
     // endregion
 
     // region Data classes for signature & internal use
@@ -3848,6 +3862,7 @@ class UssdNavigationService : AccessibilityService() {
     private val CHANNEL_ID = "bingwa_ussd"
     private val NOTIFICATION_ID = 2001
     private val SHOW_RUNNING_OVERLAY = false
+    private val FOREGROUND_WATCHDOG_INTERVAL_MS = 15_000L
 
     private val WHITESPACE_REGEX = Regex("\\s+")
     private val LEADING_DIGIT_REGEX = Regex("""^\d+\s*[\)\].:\-]?\s*""")

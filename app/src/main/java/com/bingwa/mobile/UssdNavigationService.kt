@@ -294,6 +294,7 @@ class UssdNavigationService : AccessibilityService() {
             flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
                     AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                     AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                    AccessibilityServiceInfo.FLAG_CAN_PERFORM_GESTURES or
                     AccessibilityServiceInfo.DEFAULT
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 notificationTimeout = ACCESSIBILITY_NOTIFICATION_TIMEOUT_MS
@@ -2178,13 +2179,18 @@ class UssdNavigationService : AccessibilityService() {
 
     @Suppress("DEPRECATION")
     private fun performClick(node: AccessibilityNodeInfo): Boolean {
+        if (runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)) {
+            return true
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             val bounds = Rect().also { runCatching { node.getBoundsInScreen(it) } }
             if (bounds.width() > 0 && bounds.height() > 0) {
                 val cx = bounds.exactCenterX()
                 val cy = bounds.exactCenterY()
                 if (cx > 0f && cy > 0f) {
-                    val path = Path().apply { moveTo(cx - bounds.width() / 4f, cy - bounds.height() / 4f); lineTo(cx + bounds.width() / 4f, cy + bounds.height() / 4f) }
+                    val dx = 2f
+                    val dy = 2f
+                    val path = Path().apply { moveTo(cx - dx, cy - dy); lineTo(cx + dx, cy + dy) }
                     val stroke = GestureDescription.StrokeDescription(path, 0, TAP_GESTURE_DURATION_MS, false)
                     if (runCatching { dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null) }.getOrDefault(false)) {
                         SystemClock.sleep(POST_GESTURE_WAIT_MS)
@@ -2193,8 +2199,7 @@ class UssdNavigationService : AccessibilityService() {
                 }
             }
         }
-        return runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false) ||
-                performTapGesture(node)
+        return performTapGesture(node)
     }
 
     private fun performTapGesture(node: AccessibilityNodeInfo): Boolean {

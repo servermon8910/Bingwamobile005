@@ -270,8 +270,8 @@ class UssdNavigationService : AccessibilityService() {
         bgThread = HandlerThread("UssdNavBg").apply { start() }
         bgHandler = Handler(bgThread.looper)
         windowManager = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
-        createNotificationChannel()
-        startForegroundCompat()
+        try { createNotificationChannel() } catch (e: Throwable) { Log.e(TAG, "createNotificationChannel failed", e) }
+        try { startForegroundCompat() } catch (e: Throwable) { Log.e(TAG, "startForegroundCompat failed", e) }
         if (pendingArm) {
             pendingArm = false
             handler.post { handleAdvancedSessionArmed() }

@@ -85,8 +85,20 @@ class AutomationService : Service() {
     }
 
     override fun onDestroy() {
-        foregroundHelper.stopForeground()
-        super.onDestroy()
+        try {
+            UssdQueue.cancelAllPending()
+            UssdNavigationService.advancedActive = false
+            UssdNavigationService.advancedInProgress = false
+            UssdNavigationService.onDispatchComplete = null
+            UssdNavigationService.isUsdExecutionLocked = false
+            UssdNavigationService.tokenPurchaseCallback = null
+            UssdNavigationService.balanceCallback = null
+        } catch (_: Exception) {
+            Log.e(TAG, "onDestroy cleanup failed", _)
+        } finally {
+            foregroundHelper.stopForeground()
+            super.onDestroy()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -294,7 +294,6 @@ class UssdNavigationService : AccessibilityService() {
             flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
                     AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                     AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_CAN_PERFORM_GESTURES or
                     AccessibilityServiceInfo.DEFAULT
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 notificationTimeout = ACCESSIBILITY_NOTIFICATION_TIMEOUT_MS

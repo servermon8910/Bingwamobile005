@@ -93,8 +93,8 @@ class AutomationService : Service() {
             UssdNavigationService.isUsdExecutionLocked = false
             UssdNavigationService.tokenPurchaseCallback = null
             UssdNavigationService.balanceCallback = null
-        } catch (_: Exception) {
-            Log.e(TAG, "onDestroy cleanup failed", _)
+        } catch (e: Exception) {
+            Log.e(TAG, "onDestroy cleanup failed", e)
         } finally {
             foregroundHelper.stopForeground()
             super.onDestroy()

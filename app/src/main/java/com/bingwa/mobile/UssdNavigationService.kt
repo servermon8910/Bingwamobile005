@@ -992,6 +992,15 @@ class UssdNavigationService : AccessibilityService() {
                 captureSignatureStepIfNeeded(currentStep, step, menu, snapshot, dialogText)
             }
 
+            if (signatureGuardEnabled && step.all(Char::isDigit) && loadedSignatureSteps.any { it.stepIndex == currentStep }) {
+                val stableElapsed = SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed
+                if (stableElapsed < 50) {
+                    isProcessing = false
+                    scheduleProcessStep(false, 50 - stableElapsed)
+                    return
+                }
+            }
+
             val (valueToEnter, selectedLabel) = resolveStepInput(currentStep, step, menu)
             if (!advancedActive) { isProcessing = false; return }
 
@@ -1309,9 +1318,8 @@ class UssdNavigationService : AccessibilityService() {
             val lower = dialogText.lowercase()
             val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
-                val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
                 val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (elapsed > 80L && looksReady && !hasError) {
+                if (looksReady && !hasError) {
                     clearPendingStepAdvance()
                     advanceStep()
                     scheduleProcessStep(true)
@@ -1379,9 +1387,8 @@ class UssdNavigationService : AccessibilityService() {
             val lower = dialogText.lowercase()
             val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
-                val elapsed = SystemClock.elapsedRealtime() - pendingStepAdvanceSinceElapsed
                 val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (elapsed > 80L && looksReady && !hasError) {
+                if (looksReady && !hasError) {
                     clearPendingStepAdvance()
                     advanceStep()
                     scheduleProcessStep(true)
@@ -1584,7 +1591,6 @@ class UssdNavigationService : AccessibilityService() {
                 Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
             )
         }
-        SystemClock.sleep(lowEndDelay(SETTLE_BETWEEN_WRITE_PASSES_MS))
         return runCatching {
                 node.performAction(
                     AccessibilityNodeInfo.ACTION_SET_TEXT,
@@ -2225,7 +2231,6 @@ class UssdNavigationService : AccessibilityService() {
                     val path = Path().apply { moveTo(cx - dx, cy - dy); lineTo(cx + dx, cy + dy) }
                     val stroke = GestureDescription.StrokeDescription(path, 0, TAP_GESTURE_DURATION_MS, false)
                     if (runCatching { dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null) }.getOrDefault(false)) {
-                        SystemClock.sleep(POST_GESTURE_WAIT_MS)
                         return true
                     }
                 }
@@ -2504,7 +2509,10 @@ class UssdNavigationService : AccessibilityService() {
             val score = if (shared > 0) (2 * shared.toDouble()) / (expectedTokens.size + desc.tokens.size) else 0.0
             score
         }
-        return if (best != null && best.tokens.intersect(expectedTokens).isNotEmpty()) best.key to best.label else null
+        val hasShared = best != null && best.tokens.intersect(expectedTokens).isNotEmpty()
+        return if (hasShared) best.key to best.label
+        else if (best != null && best.score >= 0.25) best.key to best.label
+        else null
     }
 
     private fun getLoadedSignatureContext(stepIndex: Int): LearnedSignatureContext? {
@@ -2546,8 +2554,10 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun failForSignatureChange(message: String) {
+        if (!advancedActive && !advancedInProgress) return
         lastFinalResponse = message
-        onDispatchComplete?.invoke(buildDispatchResult(message))
+        runCatching { onDispatchComplete?.invoke(buildDispatchResult(message)) }
+        onDispatchComplete = null
         tokenPurchaseCallback?.invoke(false)
         closeCurrentUssdUi()
         advancedInProgress = false
@@ -2581,12 +2591,14 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun finishLearningWithoutFinalSubmission() {
+        if (!advancedActive && !advancedInProgress) return
         val finalText = lastFinalResponse.ifBlank { "Signature learning captured without submitting final step" }
         currentStep = advancedSteps.size
         isProcessing = false
         clearInputWriteMarkers()
         closeCurrentUssdUi()
-        onDispatchComplete?.invoke(buildDispatchResult(finalText))
+        runCatching { onDispatchComplete?.invoke(buildDispatchResult(finalText)) }
+        onDispatchComplete = null
         advancedInProgress = false
         updateOverlay()
         cleanupAdvanced()
@@ -2709,7 +2721,8 @@ class UssdNavigationService : AccessibilityService() {
             } else {
                 "FAILED after the retry window expired"
             }
-            onDispatchComplete?.invoke(buildDispatchResult(failMsg))
+            runCatching { onDispatchComplete?.invoke(buildDispatchResult(failMsg)) }
+            onDispatchComplete = null
             tokenPurchaseCallback?.invoke(false)
             tokenPurchaseCallback = null
             cleanupAdvanced()
@@ -2741,6 +2754,7 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun finishAdvancedDispatch(finalText: String) {
+        if (!advancedActive && !advancedInProgress) return
         try {
             lastFinalResponse = finalText.ifBlank { lastFinalResponse }
             currentStep = advancedSteps.size
@@ -2750,12 +2764,14 @@ class UssdNavigationService : AccessibilityService() {
             clearPendingStepAdvance()
             clearInputWriteMarkers()
             val result = buildDispatchResult(lastFinalResponse)
-            onDispatchComplete?.invoke(result)
+            runCatching { onDispatchComplete?.invoke(result) }
+            onDispatchComplete = null
             advancedInProgress = false
             updateOverlay()
             cleanupAdvanced()
         } catch (e: Throwable) {
             Log.e(TAG, "finishAdvancedDispatch crashed", e)
+            onDispatchComplete = null
             cleanupAdvanced()
         }
     }
@@ -3786,15 +3802,15 @@ class UssdNavigationService : AccessibilityService() {
     )
 
     // Timeouts (ms)
-    private val STEP_DELAY_MS = 20L
-    private val EVENT_HOT_POLL_MS = 14L
+    private val STEP_DELAY_MS = 0L
+    private val EVENT_HOT_POLL_MS = 0L
     private val ACCESSIBILITY_NOTIFICATION_TIMEOUT_MS = 300L
-    private val DUPLICATE_EVENT_WINDOW_MS = 45L
-    private val FAST_VERIFY_POLL_MS = 10L
-    private val HOT_SEND_RETRY_DELAY_MS = 6L
-    private val SEND_RETRY_DELAY_MS = 22L
-    private val POST_WRITE_VERIFY_POLL_MS = 8L
-    private val POST_WRITE_SEND_RETRY_MS = 6L
+    private val DUPLICATE_EVENT_WINDOW_MS = 30L
+    private val FAST_VERIFY_POLL_MS = 0L
+    private val HOT_SEND_RETRY_DELAY_MS = 0L
+    private val SEND_RETRY_DELAY_MS = 0L
+    private val POST_WRITE_VERIFY_POLL_MS = 0L
+    private val POST_WRITE_SEND_RETRY_MS = 0L
     private val STEP_TIMEOUT_MS = 10000L
     private val STARTUP_STEP_TIMEOUT_MS = 14000L
     private val FINAL_RESPONSE_TIMEOUT_MS = 10000L
@@ -3809,16 +3825,16 @@ class UssdNavigationService : AccessibilityService() {
     private val NETWORK_DELAY_ROOT_REACQUIRE_TIMEOUT_MS = 18000L
     private val NETWORK_DELAY_STEP_ADVANCE_TIMEOUT_MS = 22000L
     private val NETWORK_DELAY_ACTION_GRACE_MS = 28000L
-    private val PENDING_STEP_ADVANCE_KICK_MS = 18L
-    private val VERIFY_POLL_MS = 18L
-    private val RAPID_POST_POPUP_POLL_MS = 5L
-    private val RAPID_POST_POPUP_VERIFY_MS = 4L
-    private val RAPID_POST_POPUP_SEND_RETRY_MS = 5L
+    private val PENDING_STEP_ADVANCE_KICK_MS = 0L
+    private val VERIFY_POLL_MS = 0L
+    private val RAPID_POST_POPUP_POLL_MS = 0L
+    private val RAPID_POST_POPUP_VERIFY_MS = 0L
+    private val RAPID_POST_POPUP_SEND_RETRY_MS = 0L
     private val MAX_VERIFY_ATTEMPTS = 2
     private val MAX_SEND_ATTEMPTS = 2
     private val FORCEFUL_WRITE_PASSES = 2
     private val WRITE_VERIFICATION_PASSES = 2
-    private val WRITE_VERIFICATION_SETTLE_MS = 6L
+    private val WRITE_VERIFICATION_SETTLE_MS = 0L
     private val DIRECT_WRITE_VERIFY_PASSES = 2
     private val SET_TEXT_BURST_ATTEMPTS = 2
     private val PASTE_BURST_ATTEMPTS = 1
@@ -3831,34 +3847,34 @@ class UssdNavigationService : AccessibilityService() {
     private val RECENT_VERIFIED_INPUT_GRACE_MS = 4000L
     private val RECENT_UI_EVENT_GRACE_MS = 1000L
     private val RECENT_USSD_CONTEXT_WINDOW_MS = 3_000L
-    private val GESTURE_SETTLE_MS = 12L
-    private val POST_GESTURE_WAIT_MS = 14L
-    private val POST_WRITE_VERIFY_DELAY_MS = 10L
-    private val FAST_POPUP_STABILITY_DELAY_MS = 12L
-    private val POPUP_STABILITY_DELAY_MS = 30L
-    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 20L
-    private val STARTUP_POPUP_STABILITY_DELAY_MS = 70L
-    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 35L
-    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 90L
-    private val SIM_CHOOSER_SETTLE_MS = 60L
-    private val INTERMEDIATE_POPUP_SETTLE_MS = 110L
+    private val GESTURE_SETTLE_MS = 0L
+    private val POST_GESTURE_WAIT_MS = 0L
+    private val POST_WRITE_VERIFY_DELAY_MS = 0L
+    private val FAST_POPUP_STABILITY_DELAY_MS = 50L
+    private val POPUP_STABILITY_DELAY_MS = 80L
+    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 60L
+    private val STARTUP_POPUP_STABILITY_DELAY_MS = 100L
+    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 80L
+    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 120L
+    private val SIM_CHOOSER_SETTLE_MS = 0L
+    private val INTERMEDIATE_POPUP_SETTLE_MS = 0L
     private val TAP_GESTURE_DURATION_MS = 50L
-    private val REDIAL_COOLDOWN_MS = 700L
-    private val PENDING_ADVANCE_KICK_MS = 10L
-    private val ROOT_REACQUIRE_RETRY_DELAY_MS = 80L
-    private val DIALOG_DISMISS_SETTLE_MS = 24L
-    private val BACK_ACTION_RETRY_DELAY_MS = 150L
-    private val UI_KEEP_VISIBLE_INTERVAL_MS = 350L
-    private val STARTUP_UI_KEEP_VISIBLE_MS = 7000L
-    private val PRIME_TARGET_SETTLE_MS = 25L
-    private val CHAR_GESTURE_STAGGER_MS = 45L
+    private val REDIAL_COOLDOWN_MS = 300L
+    private val PENDING_ADVANCE_KICK_MS = 0L
+    private val ROOT_REACQUIRE_RETRY_DELAY_MS = 0L
+    private val DIALOG_DISMISS_SETTLE_MS = 0L
+    private val BACK_ACTION_RETRY_DELAY_MS = 0L
+    private val UI_KEEP_VISIBLE_INTERVAL_MS = 0L
+    private val STARTUP_UI_KEEP_VISIBLE_MS = 0L
+    private val PRIME_TARGET_SETTLE_MS = 0L
+    private val CHAR_GESTURE_STAGGER_MS = 0L
     private val CHAR_GESTURE_DURATION_MS = 18L
     private val CHAR_GESTURE_SPREAD_X = 22
     private val CHAR_GESTURE_SPREAD_Y = 22
-    private val TAP_GESTURE_RETRY_SETTLE_MS = 30L
-    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 10L
-    private val RESTART_FROM_ROOT_DELAY_MS = 700L
-    private val STEP_TRANSITION_GUARD_MS = 150L
+    private val TAP_GESTURE_RETRY_SETTLE_MS = 0L
+    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 0L
+    private val RESTART_FROM_ROOT_DELAY_MS = 200L
+    private val STEP_TRANSITION_GUARD_MS = 50L
     private val MAX_RETRY_WINDOW_MS = 180000L
     private val MIN_SIM_CHOOSER_SCORE = 260
 

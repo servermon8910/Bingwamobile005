@@ -240,11 +240,10 @@ object UssdQueue {
 
     private fun waitForSilentUssdLock() {
         val waitStart = System.currentTimeMillis()
-        // Reduced max wait: don't block too long waiting for other silent USSD executions
-        val maxWait = 8_000L
+        val maxWait = 3_000L
         while (SilentUssdOptimized.isExecutionInProgress() && System.currentTimeMillis() - waitStart < maxWait) {
             try {
-                Thread.sleep(150)
+                Thread.sleep(50)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 return

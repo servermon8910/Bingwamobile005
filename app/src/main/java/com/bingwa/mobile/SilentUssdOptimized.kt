@@ -282,7 +282,7 @@ object SilentUssdOptimized {
             val enrichedResponse = if (retryCount > 0) {
                 "$response\n[Silent USSD succeeded after $retryCount retry/retries]"
             } else response
-            handler.post { cb?.invoke(enrichedResponse) }
+            handler.post { runCatching { cb?.invoke(enrichedResponse) } }
         }
     }
 
@@ -300,7 +300,7 @@ object SilentUssdOptimized {
             activeRequestId = 0L
             isProcessing.set(false)
             lastError = reason
-            handler.post { cb?.invoke(reason) }
+            handler.post { runCatching { cb?.invoke(reason) } }
         }
     }
 

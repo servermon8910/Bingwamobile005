@@ -761,11 +761,10 @@ class AutomationService : Service() {
             if (patternManager.matchesSuccessPattern(response)) return TransactionStatus.SUCCESS.value
             // Retriable patterns
             if (patternManager.matchesRetriableFinalPattern(response)) return TransactionStatus.RETRYING.value
-            // Heuristic: if response has meaningful content, treat as success
+            // Clear success heuristic
             if (looksLikeSuccessResponse(normalized)) return TransactionStatus.SUCCESS.value
-            // Default: check if it looks like a valid response at all
-            if (looksLikeValidResponse(normalized)) return TransactionStatus.SUCCESS.value
-            return TransactionStatus.FAILED.value
+            // Strict: ambiguous responses are retried, not guessed as success/failure
+            return TransactionStatus.RETRYING.value
         }
 
         fun isSuccess(response: String): Boolean {

@@ -242,13 +242,13 @@ object SilentUssd {
     private fun deliverSuccess(response: String) {
         cancelTimeout()
         val cb = synchronized(this) { val c = successCb; clearLocked(); c }
-        handler.post { cb?.invoke(response) }
+        handler.post { runCatching { cb?.invoke(response) } }
     }
 
     private fun deliverFailure(reason: String) {
         cancelTimeout()
         val cb = synchronized(this) { val c = failureCb; clearLocked(); c }
-        handler.post { cb?.invoke(reason) }
+        handler.post { runCatching { cb?.invoke(reason) } }
     }
 
     private fun armTimeout(code: String) {

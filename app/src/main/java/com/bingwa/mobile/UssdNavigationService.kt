@@ -675,7 +675,6 @@ class UssdNavigationService : AccessibilityService() {
             }
         } finally {
             current?.recycle()
-            source.recycle()
         }
         val candidate = result ?: return null
         val pkg = candidate.packageName?.toString() ?: ""
@@ -802,6 +801,7 @@ class UssdNavigationService : AccessibilityService() {
     private data class DialogCaptureCandidate(val node: AccessibilityNodeInfo, val score: Int)
 
     private fun collectDialogCandidates(node: AccessibilityNodeInfo, rootBounds: Rect, into: MutableList<DialogCaptureCandidate>, depth: Int) {
+        if (depth > 14) return
         val score = scoreDialogCandidate(node, rootBounds, depth)
         if (score > 0) into += DialogCaptureCandidate(AccessibilityNodeInfo.obtain(node), score)
         for (i in 0 until node.childCount) {
@@ -3898,14 +3898,14 @@ class UssdNavigationService : AccessibilityService() {
     private val SET_TEXT_BURST_ATTEMPTS = 2
     private val PASTE_BURST_ATTEMPTS = 1
     private val NO_FIELD_PATIENCE = 3
-    private val INPUT_TARGET_DEPTH = 8
+    private val INPUT_TARGET_DEPTH = 6
     private val VIEW_TRAVERSAL_MAX_DEPTH = 32
     private val INPUT_DESCENT_DEPTH = 4
     private val INPUT_NEARBY_SCOPE_DEPTH = 3
     private val RECENT_INPUT_GRACE_MS = 500L
     private val RECENT_VERIFIED_INPUT_GRACE_MS = 1000L
-    private val RECENT_UI_EVENT_GRACE_MS = 200L
-    private val RECENT_USSD_CONTEXT_WINDOW_MS = 1000L
+    private val RECENT_UI_EVENT_GRACE_MS = 150L
+    private val RECENT_USSD_CONTEXT_WINDOW_MS = 750L
     private val GESTURE_SETTLE_MS = 0L
     private val POST_GESTURE_WAIT_MS = 0L
     private val POST_WRITE_VERIFY_DELAY_MS = 0L

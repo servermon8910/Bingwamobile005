@@ -178,6 +178,7 @@ class UssdNavigationService : AccessibilityService() {
     private var processStepRunnable: Runnable? = null
     private var foregroundWatchdogRunnable: Runnable? = null
     private var serviceActive = true
+    @Volatile private var accessibilityEventBusy = false
 
     // Input write markers
     private var lastInputWriteValue = ""
@@ -315,6 +316,11 @@ class UssdNavigationService : AccessibilityService() {
         try { cleanupAdvanced(); clearCallbacks() } catch (e: Throwable) { Log.e(TAG, "onInterrupt crashed", e) }
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try { startForegroundCompat() } catch (_: Throwable) {}
+        return START_STICKY
+    }
+
     override fun onDestroy() {
         var destroyed = false
         try {
@@ -338,7 +344,10 @@ class UssdNavigationService : AccessibilityService() {
     // region Accessibility Event Handling (core logic)
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        if (accessibilityEventBusy) return
+        accessibilityEventBusy = true
         try {
+            if (serviceActive) runCatching { startForegroundCompat() }
             if (!advancedActive && balanceCallback == null && tokenPurchaseCallback == null && !isForegroundUiActive()) return
 
             val type = event.eventType
@@ -485,6 +494,8 @@ class UssdNavigationService : AccessibilityService() {
             }
         } catch (e: Throwable) {
             Log.e(TAG, "onAccessibilityEvent crashed", e)
+        } finally {
+            accessibilityEventBusy = false
         }
     }
 
@@ -783,7 +794,9 @@ class UssdNavigationService : AccessibilityService() {
         val rootBounds = Rect().also { runCatching { root.getBoundsInScreen(it) } }
         val candidates = mutableListOf<DialogCaptureCandidate>()
         collectDialogCandidates(root, rootBounds, candidates, 0)
-        return candidates.maxByOrNull { it.score }?.node?.let { AccessibilityNodeInfo.obtain(it) }
+        val winner = candidates.maxByOrNull { it.score }
+        candidates.forEach { if (it.node !== winner?.node) it.node.recycle() }
+        return winner?.node
     }
 
     private data class DialogCaptureCandidate(val node: AccessibilityNodeInfo, val score: Int)
@@ -1089,7 +1102,9 @@ class UssdNavigationService : AccessibilityService() {
                 // Menu button click
                 val menuBtn = findMenuButton(root, valueToEnter, selectedLabel)
                 if (menuBtn != null) {
-                    if (performClick(menuBtn)) {
+                    val clicked = performClick(menuBtn)
+                    menuBtn.recycle()
+                    if (clicked) {
                         markStepAction(dialogText, root, snapshot)
                         startPendingStepAdvance(root, dialogText)
                         return
@@ -1976,14 +1991,17 @@ class UssdNavigationService : AccessibilityService() {
         if (candidates.isEmpty()) collectAggressiveTextEntryCandidates(root, candidates)
         val match = candidates.firstOrNull { matchesExpectedInput(readFieldText(it), expected) }
         val result = match ?: candidates.maxByOrNull { scoreTextEntryCandidate(it) + if (matchesExpectedInput(readFieldText(it), expected)) 700 else 0 }
-        return result?.let { AccessibilityNodeInfo.obtain(it) }
+        candidates.forEach { if (it !== result) it.recycle() }
+        return result
     }
 
     private fun findEditableFieldForStep(root: AccessibilityNodeInfo, step: String, dialogText: String): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectTextEntryCandidates(root, candidates)
         if (candidates.isEmpty()) collectAggressiveTextEntryCandidates(root, candidates)
-        return candidates.maxByOrNull { scoreTextEntryCandidateForStep(it, step, dialogText) }?.let { AccessibilityNodeInfo.obtain(it) }
+        val winner = candidates.maxByOrNull { scoreTextEntryCandidateForStep(it, step, dialogText) }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun scoreTextEntryCandidateForStep(node: AccessibilityNodeInfo, step: String, dialogText: String): Int {
@@ -2064,17 +2082,30 @@ class UssdNavigationService : AccessibilityService() {
         // exact match by text/contentDescription
         val exact = candidates.firstOrNull { normalizeActionLabel(it.text?.toString()) == normalizeActionLabel(value) ||
                 normalizeActionLabel(it.contentDescription?.toString()) == normalizeActionLabel(value) }
-        if (exact != null) return AccessibilityNodeInfo.obtain(exact)
+        if (exact != null) {
+            candidates.forEach { if (it !== exact) it.recycle() }
+            return exact
+        }
         // contains match
         val contains = candidates.firstOrNull { normalizeActionLabel(it.text?.toString()).contains(normalizeActionLabel(value)) ||
                 normalizeActionLabel(it.contentDescription?.toString()).contains(normalizeActionLabel(value)) }
-        if (contains != null) return AccessibilityNodeInfo.obtain(contains)
+        if (contains != null) {
+            candidates.forEach { if (it !== contains) it.recycle() }
+            return contains
+        }
         // by selected label
         if (!selectedLabel.isNullOrBlank()) {
             val labelMatch = candidates.firstOrNull { normalizeActionLabel(it.text?.toString()) == normalizeActionLabel(selectedLabel) ||
                     normalizeActionLabel(it.contentDescription?.toString()) == normalizeActionLabel(selectedLabel) }
-            if (labelMatch != null) return AccessibilityNodeInfo.obtain(labelMatch)
+            if (labelMatch != null) {
+                candidates.forEach { if (it !== labelMatch) it.recycle() }
+                return labelMatch
+            }
         }
+        // fallback to send button hints
+        candidates.forEach { it.recycle() }
+        return findBestSendButton(root)
+    }
         // fallback to send button hints
         return findBestSendButton(root)
     }
@@ -2082,26 +2113,31 @@ class UssdNavigationService : AccessibilityService() {
     private fun findBestSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectActionCandidates(root, candidates)
-        return candidates.maxByOrNull { scoreSendActionCandidate(it) }?.let { AccessibilityNodeInfo.obtain(it) }
-            ?: findAggressiveSendActionButton(root)
+        val winner = candidates.maxByOrNull { scoreSendActionCandidate(it) }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner ?: findAggressiveSendActionButton(root)
     }
 
     private fun findPositiveDialogButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectActionCandidates(root, candidates)
-        return candidates.filterNot { node ->
+        val winner = candidates.filterNot { node ->
             normalizeActionLabel(node.text?.toString()) in DISMISS_BUTTON_LABELS ||
                     normalizeActionLabel(node.contentDescription?.toString()) in DISMISS_BUTTON_LABELS
-        }.maxByOrNull { scoreActionCandidate(it) }?.let { AccessibilityNodeInfo.obtain(it) }
+        }.maxByOrNull { scoreActionCandidate(it) }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun findBottomRightActionButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectActionCandidates(root, candidates)
-        return candidates.filterNot { node ->
+        val winner = candidates.filterNot { node ->
             normalizeActionLabel(node.text?.toString()) in DISMISS_BUTTON_LABELS ||
                     normalizeActionLabel(node.contentDescription?.toString()) in DISMISS_BUTTON_LABELS
-        }.maxByOrNull { scoreActionCandidate(it) + 120 }?.let { AccessibilityNodeInfo.obtain(it) }
+        }.maxByOrNull { scoreActionCandidate(it) + 120 }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun collectActionCandidates(node: AccessibilityNodeInfo, into: MutableList<AccessibilityNodeInfo>, depth: Int = 0) {
@@ -2119,8 +2155,9 @@ class UssdNavigationService : AccessibilityService() {
     private fun findAggressiveSendActionButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectAggressiveActionCandidates(root, candidates)
-        return candidates.maxByOrNull { scoreSendActionCandidate(it) + scoreAggressiveActionCandidate(it) }
-            ?.let { AccessibilityNodeInfo.obtain(it) }
+        val winner = candidates.maxByOrNull { scoreSendActionCandidate(it) + scoreAggressiveActionCandidate(it) }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun collectAggressiveActionCandidates(node: AccessibilityNodeInfo, into: MutableList<AccessibilityNodeInfo>, depth: Int = 0) {
@@ -2289,10 +2326,14 @@ class UssdNavigationService : AccessibilityService() {
         val verified = skipVerification || alreadyVerified || verifyExpectedInput(root, expected, field) || hasRecentVerifiedInput(expected)
         if (!verified) return false
         val btn = findBestSendButton(root) ?: findPositiveDialogButton(root) ?: findBottomRightActionButton(root)
-        if (btn != null && performClick(btn)) return true
+        val clicked = btn != null && performClick(btn)
+        btn?.recycle()
+        if (clicked) return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val aggressiveBtn = findAggressiveSendActionButton(root)
-            if (aggressiveBtn != null && performClick(aggressiveBtn)) return true
+            val aggressiveClicked = aggressiveBtn != null && performClick(aggressiveBtn)
+            aggressiveBtn?.recycle()
+            if (aggressiveClicked) return true
         }
         return triggerInputSubmit(root, expected, field)
     }
@@ -2300,10 +2341,14 @@ class UssdNavigationService : AccessibilityService() {
     private fun tryAggressiveImmediateSubmit(root: AccessibilityNodeInfo, field: AccessibilityNodeInfo?, expected: String, skipVerification: Boolean = false): Boolean {
         if (!skipVerification && !hasRecentVerifiedInput(expected)) return false
         val btn = findBestSendButton(root) ?: findPositiveDialogButton(root) ?: findBottomRightActionButton(root)
-        if (btn != null && performClick(btn)) return true
+        val clicked = btn != null && performClick(btn)
+        btn?.recycle()
+        if (clicked) return true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val aggressiveBtn = findAggressiveSendActionButton(root)
-            if (aggressiveBtn != null && performClick(aggressiveBtn)) return true
+            val aggressiveClicked = aggressiveBtn != null && performClick(aggressiveBtn)
+            aggressiveBtn?.recycle()
+            if (aggressiveClicked) return true
         }
         return triggerInputSubmit(root, expected, field)
     }
@@ -2840,7 +2885,9 @@ class UssdNavigationService : AccessibilityService() {
         val root = getUssdRoot() ?: return false
         try {
             val btn = findActionButton(root, DISMISS_BUTTON_LABELS)
-            return if (btn != null) performClick(btn) else false
+            val clicked = btn != null && performClick(btn)
+            btn?.recycle()
+            return clicked
         } finally {
             root.recycle()
         }
@@ -2915,17 +2962,23 @@ class UssdNavigationService : AccessibilityService() {
         val filtered = candidates.filterNot { isDismissActionNode(it) || isSimChooserDecisionNode(it) }
         val preferred = filtered.maxByOrNull { scoreSimChooserCandidate(it) }
         if (preferred != null && scoreSimChooserCandidate(preferred) >= MIN_SIM_CHOOSER_SCORE) {
-            return AccessibilityNodeInfo.obtain(preferred)
+            candidates.forEach { if (it !== preferred) it.recycle() }
+            return preferred
         }
 
         val slotIndex = preferredDialSlotIndex
-        if (slotIndex < 0) return null
+        if (slotIndex < 0) {
+            candidates.forEach { it.recycle() }
+            return null
+        }
         val ordered = filtered.sortedWith(compareBy<AccessibilityNodeInfo> {
             Rect().also { bounds -> runCatching { it.getBoundsInScreen(bounds) } }.top
         }.thenBy {
             Rect().also { bounds -> runCatching { it.getBoundsInScreen(bounds) } }.left
         })
-        return ordered.getOrNull(slotIndex)?.let { AccessibilityNodeInfo.obtain(it) }
+        val winner = ordered.getOrNull(slotIndex)
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun scoreSimChooserCandidate(node: AccessibilityNodeInfo): Int {
@@ -3388,7 +3441,9 @@ class UssdNavigationService : AccessibilityService() {
     private fun findEditableField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()
         collectTextEntryCandidates(root, candidates)
-        return candidates.maxByOrNull { scoreTextEntryCandidate(it) }?.let { AccessibilityNodeInfo.obtain(it) }
+        val winner = candidates.maxByOrNull { scoreTextEntryCandidate(it) }
+        candidates.forEach { if (it !== winner) it.recycle() }
+        return winner
     }
 
     private fun buildInputNodeSignature(node: AccessibilityNodeInfo): String {

@@ -85,6 +85,7 @@ class AutomationService : Service() {
     }
 
     override fun onDestroy() {
+        var completed = false
         try {
             UssdQueue.cancelAllPending()
             UssdNavigationService.advancedActive = false
@@ -93,11 +94,20 @@ class AutomationService : Service() {
             UssdNavigationService.isUsdExecutionLocked = false
             UssdNavigationService.tokenPurchaseCallback = null
             UssdNavigationService.balanceCallback = null
+            completed = true
         } catch (e: Exception) {
             Log.e(TAG, "onDestroy cleanup failed", e)
         } finally {
-            foregroundHelper.stopForeground()
-            super.onDestroy()
+            try {
+                foregroundHelper.stopForeground()
+            } catch (e: Exception) {
+                Log.e(TAG, "onDestroy stopForeground failed", e)
+            }
+            try {
+                super.onDestroy()
+            } catch (e: Exception) {
+                Log.e(TAG, "onDestroy super failed", e)
+            }
         }
     }
 
@@ -594,11 +604,13 @@ class AutomationService : Service() {
             UssdNavigationService.isUsdExecutionLocked = true
             val keepVisible = request.returnToAppAggressively && BingwaMobileApp.wasInForegroundRecently()
             UssdNavigationService.configureUiReturn(keepVisible)
-            UssdNavigationService.onDispatchComplete = { result ->
+            val dispatchCallback = { result: AdvancedDispatchResult ->
+                if (UssdNavigationService.onDispatchComplete == null) return@dispatchCallback
                 UssdNavigationService.isUsdExecutionLocked = false
                 onComplete(result)
                 UssdNavigationService.onDispatchComplete = null
             }
+            UssdNavigationService.onDispatchComplete = dispatchCallback
 
             UssdNavigationService.advancedSteps = steps
             UssdNavigationService.advancedPhoneNumber = request.phoneNumber

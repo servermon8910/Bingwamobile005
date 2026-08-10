@@ -177,6 +177,7 @@ class UssdNavigationService : AccessibilityService() {
     private var stepTimeoutRunnable: Runnable? = null
     private var processStepRunnable: Runnable? = null
     private var foregroundWatchdogRunnable: Runnable? = null
+    private var serviceActive = true
 
     // Input write markers
     private var lastInputWriteValue = ""
@@ -283,6 +284,9 @@ class UssdNavigationService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         activeInstance = this
+        serviceActive = true
+        try { startForegroundCompat() } catch (_: Throwable) {}
+        scheduleForegroundWatchdog()
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                     AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -312,6 +316,7 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        var destroyed = false
         try {
             serviceActive = false
             super.onDestroy()
@@ -322,7 +327,14 @@ class UssdNavigationService : AccessibilityService() {
             if (activeInstance === this) activeInstance = null
             hideOverlay()
             handler.removeCallbacksAndMessages(null)
+            destroyed = true
         } catch (e: Throwable) { Log.e(TAG, "onDestroy crashed", e) }
+        if (!destroyed) {
+            runCatching { super.onDestroy() }
+        }
+        if (!destroyed && (advancedActive || advancedInProgress || isForegroundUiActive())) {
+            runCatching { restartService() }
+        }
     }
     // endregion
 
@@ -1038,33 +1050,23 @@ class UssdNavigationService : AccessibilityService() {
                         dismissErrorAndRestart()
                         return
                     }
-                    val trusted = shouldTrustFreshWrite(wrote, valueToEnter, inputField, snapshot, lower)
-                    val recentVerified = trusted || hasRecentVerifiedInput(valueToEnter)
 
-                    if (!isFinalLearningStep(currentStep) && wrote &&
-                        tryImmediateVerifiedSend(root, inputField, valueToEnter, skipVerification = true)) {
-                        markStepAction(dialogText, root, snapshot)
-                        startPendingStepAdvance(root, dialogText)
-                        return
-                    }
-
-                    if (!isFinalLearningStep(currentStep) && wrote &&
-                        shouldAttemptAggressiveImmediateSubmit(snapshot, lower, step, valueToEnter, inputField) &&
-                        tryAggressiveImmediateSubmit(root, inputField, valueToEnter, skipVerification = true)) {
-                        markStepAction(dialogText, root, snapshot)
-                        startPendingStepAdvance(root, dialogText)
-                        return
-                    }
-
-                    if (!isFinalLearningStep(currentStep) && wrote) {
+                    if (!isFinalLearningStep(currentStep)) {
+                        if (tryImmediateVerifiedSend(root, inputField, valueToEnter, skipVerification = true)) {
+                            markStepAction(dialogText, root, snapshot)
+                            startPendingStepAdvance(root, dialogText)
+                            return
+                        }
+                        if (tryAggressiveImmediateSubmit(root, inputField, valueToEnter, skipVerification = true)) {
+                            markStepAction(dialogText, root, snapshot)
+                            startPendingStepAdvance(root, dialogText)
+                            return
+                        }
                         val verified = verifyExpectedInput(root, valueToEnter, inputField) || hasRecentVerifiedInput(valueToEnter)
-                        if (verified) {
-                            val sent = tryDirectImeSubmit(root, inputField, valueToEnter)
-                            if (sent) {
-                                markStepAction(dialogText, root, snapshot)
-                                startPendingStepAdvance(root, dialogText)
-                                return
-                            }
+                        if (verified && tryDirectImeSubmit(root, inputField, valueToEnter)) {
+                            markStepAction(dialogText, root, snapshot)
+                            startPendingStepAdvance(root, dialogText)
+                            return
                         }
                     }
 
@@ -2742,17 +2744,23 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun finishAdvancedDispatch(finalText: String) {
-        lastFinalResponse = finalText.ifBlank { lastFinalResponse }
-        currentStep = advancedSteps.size
-        currentStepRetryCount = 0
-        isProcessing = false
-        clearPendingAdvance()
-        clearPendingStepAdvance()
-        clearInputWriteMarkers()
-        onDispatchComplete?.invoke(buildDispatchResult(lastFinalResponse))
-        advancedInProgress = false
-        updateOverlay()
-        cleanupAdvanced()
+        try {
+            lastFinalResponse = finalText.ifBlank { lastFinalResponse }
+            currentStep = advancedSteps.size
+            currentStepRetryCount = 0
+            isProcessing = false
+            clearPendingAdvance()
+            clearPendingStepAdvance()
+            clearInputWriteMarkers()
+            val result = buildDispatchResult(lastFinalResponse)
+            onDispatchComplete?.invoke(result)
+            advancedInProgress = false
+            updateOverlay()
+            cleanupAdvanced()
+        } catch (e: Throwable) {
+            Log.e(TAG, "finishAdvancedDispatch crashed", e)
+            cleanupAdvanced()
+        }
     }
 
     private fun redialAdvancedIfNeeded() {
@@ -3787,11 +3795,11 @@ class UssdNavigationService : AccessibilityService() {
     private val EVENT_HOT_POLL_MS = 14L
     private val ACCESSIBILITY_NOTIFICATION_TIMEOUT_MS = 300L
     private val DUPLICATE_EVENT_WINDOW_MS = 45L
-    private val FAST_VERIFY_POLL_MS = 18L
-    private val HOT_SEND_RETRY_DELAY_MS = 12L
+    private val FAST_VERIFY_POLL_MS = 10L
+    private val HOT_SEND_RETRY_DELAY_MS = 6L
     private val SEND_RETRY_DELAY_MS = 22L
     private val POST_WRITE_VERIFY_POLL_MS = 8L
-    private val POST_WRITE_SEND_RETRY_MS = 12L
+    private val POST_WRITE_SEND_RETRY_MS = 6L
     private val STEP_TIMEOUT_MS = 10000L
     private val STARTUP_STEP_TIMEOUT_MS = 14000L
     private val FINAL_RESPONSE_TIMEOUT_MS = 10000L
@@ -3808,14 +3816,14 @@ class UssdNavigationService : AccessibilityService() {
     private val NETWORK_DELAY_ACTION_GRACE_MS = 28000L
     private val PENDING_STEP_ADVANCE_KICK_MS = 18L
     private val VERIFY_POLL_MS = 18L
-    private val RAPID_POST_POPUP_POLL_MS = 10L
-    private val RAPID_POST_POPUP_VERIFY_MS = 8L
-    private val RAPID_POST_POPUP_SEND_RETRY_MS = 10L
+    private val RAPID_POST_POPUP_POLL_MS = 5L
+    private val RAPID_POST_POPUP_VERIFY_MS = 4L
+    private val RAPID_POST_POPUP_SEND_RETRY_MS = 5L
     private val MAX_VERIFY_ATTEMPTS = 2
     private val MAX_SEND_ATTEMPTS = 2
     private val FORCEFUL_WRITE_PASSES = 2
     private val WRITE_VERIFICATION_PASSES = 2
-    private val WRITE_VERIFICATION_SETTLE_MS = 10L
+    private val WRITE_VERIFICATION_SETTLE_MS = 6L
     private val DIRECT_WRITE_VERIFY_PASSES = 2
     private val SET_TEXT_BURST_ATTEMPTS = 2
     private val PASTE_BURST_ATTEMPTS = 1
@@ -3830,7 +3838,7 @@ class UssdNavigationService : AccessibilityService() {
     private val RECENT_USSD_CONTEXT_WINDOW_MS = 3_000L
     private val GESTURE_SETTLE_MS = 12L
     private val POST_GESTURE_WAIT_MS = 14L
-    private val POST_WRITE_VERIFY_DELAY_MS = 18L
+    private val POST_WRITE_VERIFY_DELAY_MS = 10L
     private val FAST_POPUP_STABILITY_DELAY_MS = 12L
     private val POPUP_STABILITY_DELAY_MS = 30L
     private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 20L
@@ -3841,19 +3849,19 @@ class UssdNavigationService : AccessibilityService() {
     private val INTERMEDIATE_POPUP_SETTLE_MS = 110L
     private val TAP_GESTURE_DURATION_MS = 50L
     private val REDIAL_COOLDOWN_MS = 700L
-    private val PENDING_ADVANCE_KICK_MS = 18L
+    private val PENDING_ADVANCE_KICK_MS = 10L
     private val ROOT_REACQUIRE_RETRY_DELAY_MS = 80L
     private val DIALOG_DISMISS_SETTLE_MS = 24L
     private val BACK_ACTION_RETRY_DELAY_MS = 150L
     private val UI_KEEP_VISIBLE_INTERVAL_MS = 350L
     private val STARTUP_UI_KEEP_VISIBLE_MS = 7000L
-    private val PRIME_TARGET_SETTLE_MS = 40L
+    private val PRIME_TARGET_SETTLE_MS = 25L
     private val CHAR_GESTURE_STAGGER_MS = 45L
     private val CHAR_GESTURE_DURATION_MS = 18L
     private val CHAR_GESTURE_SPREAD_X = 22
     private val CHAR_GESTURE_SPREAD_Y = 22
     private val TAP_GESTURE_RETRY_SETTLE_MS = 30L
-    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 15L
+    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 10L
     private val RESTART_FROM_ROOT_DELAY_MS = 700L
     private val STEP_TRANSITION_GUARD_MS = 150L
     private val MAX_RETRY_WINDOW_MS = 180000L
@@ -3862,7 +3870,7 @@ class UssdNavigationService : AccessibilityService() {
     private val CHANNEL_ID = "bingwa_ussd"
     private val NOTIFICATION_ID = 2001
     private val SHOW_RUNNING_OVERLAY = false
-    private val FOREGROUND_WATCHDOG_INTERVAL_MS = 15_000L
+    private val FOREGROUND_WATCHDOG_INTERVAL_MS = 5_000L
 
     private val WHITESPACE_REGEX = Regex("\\s+")
     private val LEADING_DIGIT_REGEX = Regex("""^\d+\s*[\)\].:\-]?\s*""")

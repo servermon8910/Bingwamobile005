@@ -605,10 +605,12 @@ class AutomationService : Service() {
             val keepVisible = request.returnToAppAggressively && BingwaMobileApp.wasInForegroundRecently()
             UssdNavigationService.configureUiReturn(keepVisible)
             val dispatchCallback: (AdvancedDispatchResult) -> Unit = label@{ result ->
-                if (UssdNavigationService.onDispatchComplete == null) return@label
+                if (UssdNavigationService.onDispatchComplete != dispatchCallback) return@label
                 UssdNavigationService.isUsdExecutionLocked = false
                 onComplete(result)
-                UssdNavigationService.onDispatchComplete = null
+                if (UssdNavigationService.onDispatchComplete == dispatchCallback) {
+                    UssdNavigationService.onDispatchComplete = null
+                }
             }
             UssdNavigationService.onDispatchComplete = dispatchCallback
 

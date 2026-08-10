@@ -455,6 +455,7 @@ class UssdNavigationService : AccessibilityService() {
                             attemptPendingAdvance(root)
                             return
                         }
+                        if (advancedSteps.isEmpty()) return
                         val screenKey = buildScreenSignatureKey(currentStep, windowId, windowPkg, root, snapshot, dialogText)
                         if (!dialogChanged && screenKey == lastScreenSignatureKey) return
                         lastScreenSignatureKey = screenKey
@@ -994,9 +995,9 @@ class UssdNavigationService : AccessibilityService() {
 
             if (signatureGuardEnabled && step.all(Char::isDigit) && loadedSignatureSteps.any { it.stepIndex == currentStep }) {
                 val stableElapsed = SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed
-                if (stableElapsed < 20) {
+                if (stableElapsed < 10) {
                     isProcessing = false
-                    scheduleProcessStep(false, 20 - stableElapsed)
+                    scheduleProcessStep(false, 10 - stableElapsed)
                     return
                 }
             }
@@ -2760,13 +2761,17 @@ class UssdNavigationService : AccessibilityService() {
             clearPendingStepAdvance()
             clearInputWriteMarkers()
             val result = buildDispatchResult(lastFinalResponse)
-            runCatching { onDispatchComplete?.invoke(result) }
-            onDispatchComplete = null
             advancedInProgress = false
+            advancedActive = false
+            val callback = onDispatchComplete
+            runCatching { callback?.invoke(result) }
+            onDispatchComplete = null
+            if (!advancedActive) cleanupAdvanced()
             updateOverlay()
-            cleanupAdvanced()
         } catch (e: Throwable) {
             Log.e(TAG, "finishAdvancedDispatch crashed", e)
+            advancedInProgress = false
+            advancedActive = false
             onDispatchComplete = null
             cleanupAdvanced()
         }

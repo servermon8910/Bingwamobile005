@@ -3470,6 +3470,7 @@ class UssdNavigationService : AccessibilityService() {
 
     private fun requestAppUiBehindPopup(force: Boolean = false) {
         if (!shouldKeepAppUiVisible()) return
+        if (advancedActive || advancedInProgress) return
         val ussdRoot = getUssdRoot()
         if (ussdRoot != null) {
             ussdRoot.recycle()
@@ -3482,9 +3483,11 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun startKeepingAppUiVisible() {
+        if (advancedActive || advancedInProgress) return
         uiKeepVisibleRunnable?.let { handler.removeCallbacks(it) }
         val task = object : Runnable {
             override fun run() {
+                if (advancedActive || advancedInProgress) { uiKeepVisibleRunnable = null; return }
                 if (foregroundUiActive && !isForegroundUiActive()) {
                     disarmForegroundUi()
                     hasSeenForegroundPopup = false
@@ -3633,7 +3636,9 @@ class UssdNavigationService : AccessibilityService() {
         foregroundWatchdogRunnable?.let { handler.removeCallbacks(it) }
         val task = Runnable {
             if (!serviceActive) return@Runnable
-            runCatching { startForegroundCompat() }
+            if (advancedActive || advancedInProgress) {
+                runCatching { startForegroundCompat() }
+            }
             foregroundWatchdogRunnable = null
             scheduleForegroundWatchdog()
         }
@@ -3840,10 +3845,10 @@ class UssdNavigationService : AccessibilityService() {
     private val VIEW_TRAVERSAL_MAX_DEPTH = 32
     private val INPUT_DESCENT_DEPTH = 4
     private val INPUT_NEARBY_SCOPE_DEPTH = 3
-    private val RECENT_INPUT_GRACE_MS = 2500L
-    private val RECENT_VERIFIED_INPUT_GRACE_MS = 4000L
-    private val RECENT_UI_EVENT_GRACE_MS = 1000L
-    private val RECENT_USSD_CONTEXT_WINDOW_MS = 3_000L
+    private val RECENT_INPUT_GRACE_MS = 500L
+    private val RECENT_VERIFIED_INPUT_GRACE_MS = 1000L
+    private val RECENT_UI_EVENT_GRACE_MS = 200L
+    private val RECENT_USSD_CONTEXT_WINDOW_MS = 1000L
     private val GESTURE_SETTLE_MS = 0L
     private val POST_GESTURE_WAIT_MS = 0L
     private val POST_WRITE_VERIFY_DELAY_MS = 0L
@@ -3878,7 +3883,7 @@ class UssdNavigationService : AccessibilityService() {
     private val CHANNEL_ID = "bingwa_ussd"
     private val NOTIFICATION_ID = 2001
     private val SHOW_RUNNING_OVERLAY = false
-    private val FOREGROUND_WATCHDOG_INTERVAL_MS = 5_000L
+    private val FOREGROUND_WATCHDOG_INTERVAL_MS = 3_000L
 
     private val WHITESPACE_REGEX = Regex("\\s+")
     private val LEADING_DIGIT_REGEX = Regex("""^\d+\s*[\)\].:\-]?\s*""")

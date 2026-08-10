@@ -2502,17 +2502,13 @@ class UssdNavigationService : AccessibilityService() {
         val expectedTokens = learned.selectedLabelTokens
         val menuOptions = menu.entries.map { (key, label) ->
             val normalized = normalizeMenuText(label)
-            MenuOptionDescriptor(key, label, normalized, tokenizeMenuLabel(normalized))
+            val tokens = tokenizeMenuLabel(normalized)
+            val shared = expectedTokens.intersect(tokens).size
+            val score = if (shared > 0) (2 * shared.toDouble()) / (expectedTokens.size + tokens.size) else 0.0
+            MenuOptionDescriptor(key, label, normalized, tokens, score)
         }
-        val best = menuOptions.maxByOrNull { desc ->
-            val shared = expectedTokens.intersect(desc.tokens).size
-            val score = if (shared > 0) (2 * shared.toDouble()) / (expectedTokens.size + desc.tokens.size) else 0.0
-            score
-        }
-        val hasShared = best != null && best.tokens.intersect(expectedTokens).isNotEmpty()
-        return if (hasShared) best.key to best.label
-        else if (best != null && best.score >= 0.25) best.key to best.label
-        else null
+        val best = menuOptions.maxByOrNull { it.score }
+        return if (best != null && (best.tokens.intersect(expectedTokens).isNotEmpty() || best.score >= 0.25)) best.key to best.label else null
     }
 
     private fun getLoadedSignatureContext(stepIndex: Int): LearnedSignatureContext? {
@@ -3653,7 +3649,8 @@ class UssdNavigationService : AccessibilityService() {
         val key: String,
         val label: String,
         val normalizedLabel: String,
-        val tokens: Set<String>
+        val tokens: Set<String>,
+        val score: Double
     )
     private data class LearnedSignatureContext(
         val step: UssdSignatureStep,

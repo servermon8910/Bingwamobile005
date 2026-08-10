@@ -161,6 +161,7 @@ class UssdNavigationService : AccessibilityService() {
         startKeepingAppUiVisible()
         updateOverlay()
         startStepTimeout()
+        startFrozenPopupWatchdog()
     }
 
     // region Internal Helpers (all functionality is inside this service – no external dependencies)
@@ -218,6 +219,8 @@ class UssdNavigationService : AccessibilityService() {
     private var lastScreenSignatureKey = ""
     private var lastObservedDialogStateKey = ""
     private var lastObservedDialogStateChangedElapsed = 0L
+    private var lastProgressElapsed = 0L
+    private var frozenPopupWatchdogRunnable: Runnable? = null
 
     // Recent USSD context cache (to avoid repeated scans)
     private var recentUssdRoot: AccessibilityNodeInfo? = null
@@ -412,6 +415,9 @@ class UssdNavigationService : AccessibilityService() {
                 lastRelevantEventElapsed = SystemClock.elapsedRealtime()
                 rememberRecentUssdContext(root, snapshot, windowId, windowPkg, dialogText, requireStrict)
                 rememberObservedDialogState(windowId, windowPkg, dialogText, snapshot)
+                if (advancedActive && advancedSteps.isNotEmpty() && dialogText.isNotBlank()) {
+                    rememberProgress()
+                }
 
                 if (advancedActive && advancedSteps.isNotEmpty()) {
                     if (!hasSeenAdvancedPopup) {
@@ -727,10 +733,33 @@ class UssdNavigationService : AccessibilityService() {
     )
 
     private fun capturePreferredPopupSnapshot(root: AccessibilityNodeInfo, requireStrict: Boolean): UssdTreeSnapshot? {
+        val now = SystemClock.elapsedRealtime()
+        val windowId = root.windowId
+        val pkg = root.packageName?.toString() ?: ""
+        if (windowId == recentUssdWindowId && pkg == recentUssdWindowPkg &&
+            requireStrict == recentUssdStrictDialog &&
+            now - recentUssdCapturedElapsed < RECENT_USSD_CONTEXT_WINDOW_MS &&
+            recentUssdSnapshot != null
+        ) {
+            return recentUssdSnapshot
+        }
         val strict = captureStrictSnapshot(root)
-        if (strict != null) return strict
+        if (strict != null) {
+            recentUssdSnapshot = strict
+            recentUssdWindowId = windowId
+            recentUssdWindowPkg = pkg
+            recentUssdStrictDialog = requireStrict
+            recentUssdCapturedElapsed = now
+            return strict
+        }
         if (requireStrict && !shouldAllowRelaxedFallback(root)) return null
-        return captureSnapshot(root)
+        val relaxed = captureSnapshot(root)
+        recentUssdSnapshot = relaxed
+        recentUssdWindowId = windowId
+        recentUssdWindowPkg = pkg
+        recentUssdStrictDialog = requireStrict
+        recentUssdCapturedElapsed = now
+        return relaxed
     }
 
     private fun captureStrictSnapshot(root: AccessibilityNodeInfo): UssdTreeSnapshot? {
@@ -767,7 +796,8 @@ class UssdNavigationService : AccessibilityService() {
         var bestInputScore = Int.MIN_VALUE
     }
 
-    private fun collectTreeSnapshot(node: AccessibilityNodeInfo, acc: TreeScanAccumulator) {
+    private fun collectTreeSnapshot(node: AccessibilityNodeInfo, acc: TreeScanAccumulator, depth: Int = 0, maxDepth: Int = 20) {
+        if (depth > maxDepth) return
         try {
             node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { acc.textTokens += it }
             node.contentDescription?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { acc.textTokens += it }
@@ -783,7 +813,7 @@ class UssdNavigationService : AccessibilityService() {
             if (isDismissActionNode(node)) acc.hasDismissButton = true
             for (i in 0 until node.childCount) {
                 val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
-                collectTreeSnapshot(child, acc)
+                collectTreeSnapshot(child, acc, depth + 1, maxDepth)
                 child.recycle()
             }
         } catch (_: Exception) {}
@@ -822,7 +852,7 @@ class UssdNavigationService : AccessibilityService() {
         if (ratio < 0.03f) return 0
 
         val acc = TreeScanAccumulator()
-        collectTreeSnapshot(node, acc)
+        collectTreeSnapshot(node, acc, maxDepth = 18)
         val text = acc.textTokens.joinToString(" ").lowercase()
         if (text.isBlank()) return 0
         if (NON_USSD_DIALOG_HINTS.any { text.contains(it) }) return 0
@@ -1457,6 +1487,7 @@ class UssdNavigationService : AccessibilityService() {
         lastProcessedStep = currentStep
         currentStep++
         currentStepRetryCount = 0
+        rememberProgress()
         isProcessing = false
         
         // UI updates
@@ -1522,12 +1553,14 @@ class UssdNavigationService : AccessibilityService() {
                         rememberInputWrite(value)
                         if (result.likelyVerified || verifyWrittenValueWithRetries(verificationRoot, target, value)) {
                             rememberVerifiedInput(value)
+                            rememberProgress()
                             return true
                         }
                     }
                 }
                 if (wrote && verifyWrittenValueWithRetries(verificationRoot, field, value)) {
                     rememberVerifiedInput(value)
+                    rememberProgress()
                     return true
                 }
             } finally {
@@ -1680,15 +1713,30 @@ class UssdNavigationService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
         val bounds = Rect().also { runCatching { field.getBoundsInScreen(it) } }
         if (bounds.width() <= 0 || bounds.height() <= 0) return false
-        val centerX = bounds.centerX()
-        val centerY = bounds.centerY()
-        val clickStart = SystemClock.uptimeMillis()
-        val clickEnd = clickStart + TAP_GESTURE_DURATION_MS
-        val clickPath = Path().apply { moveTo(centerX.toFloat(), centerY.toFloat()) }
-        val clickStroke = GestureDescription.StrokeDescription(clickPath, clickStart, clickEnd - clickStart, false)
-        val clickDesc = GestureDescription.Builder().addStroke(clickStroke).build()
+        val baseX = bounds.centerX().toFloat()
+        val baseY = bounds.centerY().toFloat()
+        val offsets = listOf(
+            0f to 0f,
+            -(bounds.width() / 4f) to 0f,
+            (bounds.width() / 4f) to 0f,
+            0f to -(bounds.height() / 4f),
+            0f to (bounds.height() / 4f)
+        )
         var clicked = false
-        runCatching { dispatchGesture(clickDesc, null, null) }.onSuccess { clicked = true }.onFailure { Log.w(TAG, "dispatchGesture tap failed", it) }
+        for ((dx, dy) in offsets) {
+            val cx = baseX + dx
+            val cy = baseY + dy
+            if (cx <= 0f || cy <= 0f) continue
+            val clickStart = SystemClock.uptimeMillis()
+            val clickEnd = clickStart + TAP_GESTURE_DURATION_MS
+            val clickPath = Path().apply { moveTo(cx, cy) }
+            val clickStroke = GestureDescription.StrokeDescription(clickPath, clickStart, clickEnd - clickStart, false)
+            val clickDesc = GestureDescription.Builder().addStroke(clickStroke).build()
+            if (runCatching { dispatchGesture(clickDesc, null, null) }.isSuccess) {
+                clicked = true
+                break
+            }
+        }
         if (!clicked) return false
         SystemClock.sleep(POST_GESTURE_WAIT_MS + TAP_GESTURE_RETRY_SETTLE_MS)
         val chars = value.toCharArray()
@@ -1700,7 +1748,7 @@ class UssdNavigationService : AccessibilityService() {
             val keyPath = Path().also { p ->
                 val offsetX = ((idx % 5) - 2) * CHAR_GESTURE_SPREAD_X
                 val offsetY = (idx / 5) * CHAR_GESTURE_SPREAD_Y
-                p.moveTo((centerX + offsetX).toFloat(), (centerY + offsetY).toFloat())
+                p.moveTo((baseX + offsetX).coerceAtLeast(1f), (baseY + offsetY).coerceAtLeast(1f))
             }
             val stroke = GestureDescription.StrokeDescription(keyPath, keyStart, keyEnd - keyStart, false)
             val desc = GestureDescription.Builder().addStroke(stroke).build()
@@ -2253,6 +2301,7 @@ class UssdNavigationService : AccessibilityService() {
     @Suppress("DEPRECATION")
     private fun performClick(node: AccessibilityNodeInfo): Boolean {
         if (runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)) {
+            rememberProgress()
             return true
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -2266,6 +2315,7 @@ class UssdNavigationService : AccessibilityService() {
                     val path = Path().apply { moveTo(cx - dx, cy - dy); lineTo(cx + dx, cy + dy) }
                     val stroke = GestureDescription.StrokeDescription(path, 0, TAP_GESTURE_DURATION_MS, false)
                     if (runCatching { dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null) }.getOrDefault(false)) {
+                        rememberProgress()
                         return true
                     }
                 }
@@ -2419,37 +2469,40 @@ class UssdNavigationService : AccessibilityService() {
         return label in DISMISS_BUTTON_LABELS || desc in DISMISS_BUTTON_LABELS || DISMISS_VIEW_ID_HINTS.any { viewId.contains(it) }
     }
 
-    private fun hasSendOrOkButton(node: AccessibilityNodeInfo): Boolean {
+    private fun hasSendOrOkButton(node: AccessibilityNodeInfo, depth: Int = 0, maxDepth: Int = 20): Boolean {
+        if (depth > maxDepth) return false
         val label = normalizeActionLabel(node.text?.toString())
         val desc = normalizeActionLabel(node.contentDescription?.toString())
         val viewId = normalizeActionLabel(runCatching { node.viewIdResourceName }.getOrNull())
         if (label in SEND_BUTTON_LABELS || desc in SEND_BUTTON_LABELS || SEND_VIEW_ID_HINTS.any { viewId.contains(it) }) return true
         for (i in 0 until node.childCount) {
             val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
-            if (hasSendOrOkButton(child)) { child.recycle(); return true }
+            if (hasSendOrOkButton(child, depth + 1, maxDepth)) { child.recycle(); return true }
             child.recycle()
         }
         return false
     }
 
-    private fun hasDismissButton(node: AccessibilityNodeInfo): Boolean {
+    private fun hasDismissButton(node: AccessibilityNodeInfo, depth: Int = 0, maxDepth: Int = 20): Boolean {
+        if (depth > maxDepth) return false
         val label = normalizeActionLabel(node.text?.toString())
         val desc = normalizeActionLabel(node.contentDescription?.toString())
         val viewId = normalizeActionLabel(runCatching { node.viewIdResourceName }.getOrNull())
         if (label in DISMISS_BUTTON_LABELS || desc in DISMISS_BUTTON_LABELS || DISMISS_VIEW_ID_HINTS.any { viewId.contains(it) }) return true
         for (i in 0 until node.childCount) {
             val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
-            if (hasDismissButton(child)) { child.recycle(); return true }
+            if (hasDismissButton(child, depth + 1, maxDepth)) { child.recycle(); return true }
             child.recycle()
         }
         return false
     }
 
-    private fun hasEditableField(node: AccessibilityNodeInfo): Boolean {
+    private fun hasEditableField(node: AccessibilityNodeInfo, depth: Int = 0, maxDepth: Int = 20): Boolean {
+        if (depth > maxDepth) return false
         if (supportsDirectInput(node) || isLooseInputCandidate(node)) return true
         for (i in 0 until node.childCount) {
             val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
-            if (hasEditableField(child)) { child.recycle(); return true }
+            if (hasEditableField(child, depth + 1, maxDepth)) { child.recycle(); return true }
             child.recycle()
         }
         return false
@@ -2716,6 +2769,95 @@ class UssdNavigationService : AccessibilityService() {
     private fun hasRecentStepAction() = lastStepActionKey.isNotBlank() && SystemClock.elapsedRealtime() - lastStepActionElapsed <= NETWORK_DELAY_ACTION_GRACE_MS
     private fun isWaitingOnTransientResponse() = normalizeMenuText(lastFinalResponse).isNotBlank() && isTransientResponse(normalizeMenuText(lastFinalResponse))
     private fun isTransientResponse(text: String) = TRANSIENT_RESPONSE_HINTS.any { text.contains(it) }
+
+    private fun rememberProgress() {
+        lastProgressElapsed = SystemClock.elapsedRealtime()
+    }
+
+    private fun hasStaleProgress(staleMs: Long = 4500L): Boolean {
+        if (lastProgressElapsed <= 0L) return false
+        return SystemClock.elapsedRealtime() - lastProgressElapsed > staleMs
+    }
+
+    private fun startFrozenPopupWatchdog() {
+        stopFrozenPopupWatchdog()
+        val watchdog = object : Runnable {
+            override fun run() {
+                if (!advancedActive && !advancedInProgress) return
+                frozenPopupWatchdogRunnable = null
+                if (detectStackedUssdPopups() || shouldDismissFrozenPopup()) {
+                    Log.w(TAG, "Frozen/stacked USSD popup detected – dismissing and restarting")
+                    dismissCurrentUssdAndRestart()
+                    return
+                }
+                frozenPopupWatchdogRunnable = this
+                handler.postDelayed(this, FROZEN_POPUP_WATCHDOG_INTERVAL_MS)
+            }
+        }
+        frozenPopupWatchdogRunnable = watchdog
+        handler.postDelayed(watchdog, FROZEN_POPUP_WATCHDOG_INTERVAL_MS)
+    }
+
+    private fun stopFrozenPopupWatchdog() {
+        frozenPopupWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        frozenPopupWatchdogRunnable = null
+    }
+
+    private fun detectStackedUssdPopups(): Boolean {
+        if (!advancedActive || currentStep >= advancedSteps.size) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return false
+        val wins = try { windows } catch (_: Exception) { return false }
+        var ussdCount = 0
+        for (win in wins) {
+            val root = try { win.root } catch (_: Exception) { continue } ?: continue
+            val pkg = root.packageName?.toString() ?: ""
+            root.recycle()
+            if (isPotentialUssdPackage(pkg) || pkg == "android") ussdCount++
+            if (ussdCount > 1) return true
+        }
+        return false
+    }
+
+    private fun shouldDismissFrozenPopup(): Boolean {
+        if (!advancedActive) return false
+        if (currentStep >= advancedSteps.size) return false
+        if (!hasSeenAdvancedPopup) return false
+        val dialogStateFresh = lastObservedDialogStateChangedElapsed > 0L &&
+            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed <= 3000L
+        if (dialogStateFresh) return false
+        if (!isProcessing && !hasRecentUssdUiEvent()) return false
+        val staleProgress = lastProgressElapsed > 0L &&
+            SystemClock.elapsedRealtime() - lastProgressElapsed > 4000L
+        val staleDialog = lastObservedDialogStateChangedElapsed > 0L &&
+            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed > 5000L
+        return staleProgress || staleDialog
+    }
+
+    private fun dismissCurrentUssdAndRestart() {
+        if (!advancedActive && !advancedInProgress) return
+        cancelStepTimeout()
+        stopFrozenPopupWatchdog()
+        val dismissed = closeCurrentUssdUi()
+        handler.postDelayed({
+            if (!advancedActive && !advancedInProgress) return@postDelayed
+            isProcessing = false
+            clearPendingAdvance()
+            clearPendingStepAdvance()
+            clearInputWriteMarkers()
+            clearRecentUssdContext()
+            hasSeenAdvancedPopup = false
+            lastObservedDialogStateKey = ""
+            lastObservedDialogStateChangedElapsed = 0L
+            lastProgressElapsed = 0L
+            if (dismissed) {
+                requestAppUiBehindPopup(force = true)
+                updateOverlay()
+            }
+            redialAdvancedIfNeeded()
+            startStepTimeout()
+            startFrozenPopupWatchdog()
+        }, if (dismissed) DIALOG_DISMISS_SETTLE_MS else 0L)
+    }
 
     private fun verificationPollDelay(expected: String): Long {
         return when {
@@ -3106,6 +3248,8 @@ class UssdNavigationService : AccessibilityService() {
         uiKeepVisibleRunnable = null
         foregroundWatchdogRunnable?.let { handler.removeCallbacks(it) }
         foregroundWatchdogRunnable = null
+        frozenPopupWatchdogRunnable?.let { handler.removeCallbacks(it) }
+        frozenPopupWatchdogRunnable = null
         currentStep = 0
         advancedSteps = emptyList()
         advancedPhoneNumber = ""
@@ -3340,7 +3484,7 @@ class UssdNavigationService : AccessibilityService() {
             return
         }
         pendingProcessToken = SystemClock.elapsedRealtime()
-        scheduleProcessStep(false, ROOT_REACQUIRE_RETRY_DELAY_MS)
+        scheduleProcessStep(false, 150L)
     }
 
     private fun clearRootRecoveryState() { waitingForRootSinceElapsed = 0L }
@@ -3474,18 +3618,19 @@ class UssdNavigationService : AccessibilityService() {
         return "$stepFingerprint|${root.windowId}|${root.packageName?.toString().orEmpty()}|$cls|$flags|${normalizeCollapsedText(text)}|$menuFingerprint"
     }
 
-    private fun extractAllText(root: AccessibilityNodeInfo): String {
+    private fun extractAllText(root: AccessibilityNodeInfo, maxDepth: Int = 24): String {
         val sb = StringBuilder()
-        fun dfs(node: AccessibilityNodeInfo) {
+        fun dfs(node: AccessibilityNodeInfo, depth: Int) {
+            if (depth > maxDepth) return
             node.text?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { sb.append(it).append(' ') }
             node.contentDescription?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let { sb.append(it).append(' ') }
             for (i in 0 until node.childCount) {
                 val child = try { node.getChild(i) } catch (_: Exception) { null } ?: continue
-                dfs(child)
+                dfs(child, depth + 1)
                 child.recycle()
             }
         }
-        dfs(root)
+        dfs(root, 0)
         return sb.toString()
     }
 
@@ -3884,15 +4029,16 @@ class UssdNavigationService : AccessibilityService() {
     private val NETWORK_DELAY_ROOT_REACQUIRE_TIMEOUT_MS = 18000L
     private val NETWORK_DELAY_STEP_ADVANCE_TIMEOUT_MS = 22000L
     private val NETWORK_DELAY_ACTION_GRACE_MS = 28000L
+    private val FROZEN_POPUP_WATCHDOG_INTERVAL_MS = 1500L
     private val PENDING_STEP_ADVANCE_KICK_MS = 0L
     private val VERIFY_POLL_MS = 0L
     private val RAPID_POST_POPUP_POLL_MS = 0L
     private val RAPID_POST_POPUP_VERIFY_MS = 0L
     private val RAPID_POST_POPUP_SEND_RETRY_MS = 0L
-    private val MAX_VERIFY_ATTEMPTS = 2
+    private val MAX_VERIFY_ATTEMPTS = 3
     private val MAX_SEND_ATTEMPTS = 2
-    private val FORCEFUL_WRITE_PASSES = 2
-    private val WRITE_VERIFICATION_PASSES = 2
+    private val FORCEFUL_WRITE_PASSES = 3
+    private val WRITE_VERIFICATION_PASSES = 3
     private val WRITE_VERIFICATION_SETTLE_MS = 0L
     private val DIRECT_WRITE_VERIFY_PASSES = 2
     private val SET_TEXT_BURST_ATTEMPTS = 2
@@ -3917,17 +4063,16 @@ class UssdNavigationService : AccessibilityService() {
     private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 0L
     private val SIM_CHOOSER_SETTLE_MS = 0L
     private val INTERMEDIATE_POPUP_SETTLE_MS = 0L
-    private val TAP_GESTURE_DURATION_MS = 50L
+    private val TAP_GESTURE_DURATION_MS = 80L
     private val REDIAL_COOLDOWN_MS = 300L
     private val PENDING_ADVANCE_KICK_MS = 0L
-    private val ROOT_REACQUIRE_RETRY_DELAY_MS = 0L
     private val DIALOG_DISMISS_SETTLE_MS = 0L
     private val BACK_ACTION_RETRY_DELAY_MS = 0L
     private val UI_KEEP_VISIBLE_INTERVAL_MS = 0L
     private val STARTUP_UI_KEEP_VISIBLE_MS = 0L
     private val PRIME_TARGET_SETTLE_MS = 0L
-    private val CHAR_GESTURE_STAGGER_MS = 0L
-    private val CHAR_GESTURE_DURATION_MS = 18L
+    private val CHAR_GESTURE_STAGGER_MS = 20L
+    private val CHAR_GESTURE_DURATION_MS = 30L
     private val CHAR_GESTURE_SPREAD_X = 22
     private val CHAR_GESTURE_SPREAD_Y = 22
     private val TAP_GESTURE_RETRY_SETTLE_MS = 0L

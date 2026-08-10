@@ -332,9 +332,6 @@ class UssdNavigationService : AccessibilityService() {
         if (!destroyed) {
             runCatching { super.onDestroy() }
         }
-        if (!destroyed && (advancedActive || advancedInProgress || isForegroundUiActive())) {
-            runCatching { restartService() }
-        }
     }
     // endregion
 
@@ -3619,8 +3616,6 @@ class UssdNavigationService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
         else stopForeground(true)
     }
-
-    private var serviceActive = true
 
     private fun scheduleForegroundWatchdog() {
         foregroundWatchdogRunnable?.let { handler.removeCallbacks(it) }

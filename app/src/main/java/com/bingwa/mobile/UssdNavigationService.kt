@@ -2106,9 +2106,6 @@ class UssdNavigationService : AccessibilityService() {
         candidates.forEach { it.recycle() }
         return findBestSendButton(root)
     }
-        // fallback to send button hints
-        return findBestSendButton(root)
-    }
 
     private fun findBestSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         val candidates = mutableListOf<AccessibilityNodeInfo>()

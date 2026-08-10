@@ -994,9 +994,9 @@ class UssdNavigationService : AccessibilityService() {
 
             if (signatureGuardEnabled && step.all(Char::isDigit) && loadedSignatureSteps.any { it.stepIndex == currentStep }) {
                 val stableElapsed = SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed
-                if (stableElapsed < 50) {
+                if (stableElapsed < 20) {
                     isProcessing = false
-                    scheduleProcessStep(false, 50 - stableElapsed)
+                    scheduleProcessStep(false, 20 - stableElapsed)
                     return
                 }
             }
@@ -3847,12 +3847,12 @@ class UssdNavigationService : AccessibilityService() {
     private val GESTURE_SETTLE_MS = 0L
     private val POST_GESTURE_WAIT_MS = 0L
     private val POST_WRITE_VERIFY_DELAY_MS = 0L
-    private val FAST_POPUP_STABILITY_DELAY_MS = 50L
-    private val POPUP_STABILITY_DELAY_MS = 80L
-    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 60L
-    private val STARTUP_POPUP_STABILITY_DELAY_MS = 100L
-    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 80L
-    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 120L
+    private val FAST_POPUP_STABILITY_DELAY_MS = 0L
+    private val POPUP_STABILITY_DELAY_MS = 0L
+    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 0L
+    private val STARTUP_POPUP_STABILITY_DELAY_MS = 0L
+    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 0L
+    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 0L
     private val SIM_CHOOSER_SETTLE_MS = 0L
     private val INTERMEDIATE_POPUP_SETTLE_MS = 0L
     private val TAP_GESTURE_DURATION_MS = 50L

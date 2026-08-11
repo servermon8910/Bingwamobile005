@@ -1633,32 +1633,23 @@ class UssdNavigationService : AccessibilityService() {
     }
 
     private fun setTextOnNode(node: AccessibilityNodeInfo, value: String): Boolean {
-        if (!supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
-        runCatching {
+        if (value.isBlank() || !supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
+        refocusInputTarget(node)
+        activateInputTarget(node)
+        return runCatching {
             node.performAction(
                 AccessibilityNodeInfo.ACTION_SET_TEXT,
-                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
             )
-        }
-        return runCatching {
-                node.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_TEXT,
-                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
-                )
-            }.getOrDefault(false)
+        }.getOrDefault(false)
     }
 
     private fun reinforceTextWrite(node: AccessibilityNodeInfo, value: String): Boolean {
+        if (value.isBlank()) return false
         repeat(2) { attempt ->
             if (attempt > 0) {
                 primeInputTarget(node, true)
                 refreshInputTarget(node)
-                runCatching {
-                    node.performAction(
-                        AccessibilityNodeInfo.ACTION_SET_TEXT,
-                        Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
-                    )
-                }
             }
             if (runCatching {
                     node.performAction(

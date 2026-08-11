@@ -1,0 +1,199 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index c458b8c..2dbb8fd 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -19,8 +19,8 @@ android {
+         applicationId = "com.bingwa.mobile"
+         minSdk = 21
+         targetSdk = 34
+-        versionCode = 333
+-        versionName = "3.3.4"
++        versionCode = 334
++        versionName = "3.3.5"
+     }
+
+diff --git a/app/src/main/java/com/bingwa/mobile/MainActivity.kt b/app/src/main/java/com/bingwa/mobile/MainActivity.kt
+index c298973..477b0bb 100644
+--- a/app/src/main/java/com/bingwa/mobile/MainActivity.kt
++++ b/app/src/main/java/com/bingwa/mobile/MainActivity.kt
+@@ -16,7 +16,6 @@ import android.content.pm.PackageManager
+ import android.net.Uri
+ import android.os.Build
+ import android.os.Bundle
+-import android.os.SystemClock
+ import android.os.VibrationEffect
+ import android.os.Vibrator
+ import android.provider.Settings
+@@ -120,7 +119,6 @@ private fun formatStartupFallbackErrorLabel(raw: String): String {
+ class MainActivity : ComponentActivity() {
+     private var pendingStartupPermissions: Array<String> = emptyArray()
+-    private var lastAppOpenBalanceRefreshElapsed: Long = 0L
+
+@@ -163,20 +161,9 @@ class MainActivity : ComponentActivity() {
+         UssdNavigationService.onAppUiForegrounded()
+         if (shouldAutoStartPhoneAutomation(this)) {
+             ServiceLauncher.startBalanceChecker(this)
+-            triggerAppOpenBalanceRefresh()
+         }
+     }
+-
+-    private fun triggerAppOpenBalanceRefresh() {
+-        val now = SystemClock.elapsedRealtime()
+-        if (now - lastAppOpenBalanceRefreshElapsed < 1_500L) return
+-        lastAppOpenBalanceRefreshElapsed = now
+-        requestBalanceCheckSafely(
+-            context = this,
+-            ignoreCooldown = true
+-        )
+-    }
+
+diff --git a/app/src/main/java/com/bingwa/mobile/BalanceChecker.kt b/app/src/main/java/com/bingwa/mobile/BalanceChecker.kt
+index 19baa47..c8571b5 100644
+--- a/app/src/main/java/com/bingwa/mobile/BalanceChecker.kt
++++ b/app/src/main/java/com/bingwa/mobile/BalanceChecker.kt
+@@ -20,8 +20,9 @@ class BalanceChecker : Service() {
+         private const val TAG = "BalanceChecker"
+         private const val DEFAULT_BALANCE_USSD = "*144#"
+         private const val AIRTEL_BALANCE_USSD = "*131#"
+-        private const val CHECK_INTERVAL = 60_000L
++        private const val CHECK_INTERVAL = 5 * 60_000L
+         private const val BALANCE_TIMEOUT_MS = 30_000L
++        private const val EVENT_REFRESH_DELAY_MS = 2_000L
+         private const val FOREGROUND_REFRESH_COOLDOWN_MS = 3_000L
+@@ -35,6 +36,7 @@ class BalanceChecker : Service() {
+         private val timeoutHandler = Handler(Looper.getMainLooper())
+         private var timeoutRunnable: Runnable? = null
++        private var pendingRefreshRunnable: Runnable? = null
+         @Volatile private var activeRequestContext: BalanceRequestContext? = null
+@@ -155,6 +157,41 @@ class BalanceChecker : Service() {
+             return true
+         }
++
++        fun scheduleAirtimeRefresh(
++            context: Context,
++            reason: String,
++            delayMs: Long = EVENT_REFRESH_DELAY_MS
++        ): Boolean {
++            val appContext = context.applicationContext
++            val automationEnabled = appContext
++                .getSharedPreferences("app_settings", Context.MODE_PRIVATE)
++                .getBoolean("automation_enabled", true)
++            if (!automationEnabled) {
++                Log.d(TAG, "Skipping scheduled airtime refresh for $reason because automation is disabled")
++                return false
++            }
++
++            ServiceLauncher.startBalanceChecker(appContext)
++
++            var scheduledRefresh: Runnable? = null
++            scheduledRefresh = Runnable {
++                if (pendingRefreshRunnable === scheduledRefresh) {
++                    pendingRefreshRunnable = null
++                }
++                val started = requestBalanceCheck(
++                    context = appContext,
++                    ignoreCooldown = true
++                )
++                Log.d(TAG, "Scheduled airtime refresh reason=$reason started=$started")
++            }
++            val refreshRunnable = scheduledRefresh ?: return false
++
++            pendingRefreshRunnable?.let(timeoutHandler::removeCallbacks)
++            pendingRefreshRunnable = refreshRunnable
++            timeoutHandler.postDelayed(refreshRunnable, delayMs.coerceAtLeast(0L))
++            return true
++        }
+
+diff --git a/app/src/main/java/com/bingwa/mobile/MpesaReceiver.kt b/app/src/main/java/com/bingwa/mobile/MpesaReceiver.kt
+index 251eb5d..90149d4 100644
+--- a/app/src/main/java/com/bingwa/mobile/MpesaReceiver.kt
++++ b/app/src/main/java/com/bingwa/mobile/MpesaReceiver.kt
+@@ -4,8 +4,6 @@ import android.Manifest
+ import android.content.*
+ import android.content.pm.PackageManager
+ import android.os.Build
+-import android.os.Handler
+-import android.os.Looper
+ import android.provider.Telephony
+ import android.telephony.SmsMessage
+@@ -239,12 +237,12 @@ class MpesaReceiver : BroadcastReceiver() {
+             if (handleCustomerReplySms(context, sender, body)) return@forEach
+             if (!isMpesaSms(sender, body)) return@forEach
+             Log.d(TAG, "M-PESA SMS sender='$sender' body='$body'")
+-
+-            if (isAirtimeTopup(sender, body)) {
+-                Handler(Looper.getMainLooper()).postDelayed({
+-                    BalanceChecker.requestBalanceCheck(context)
+-                }, 2_000L)
++            val refreshReason = if (isAirtimeTopup(sender, body)) {
++                "airtime top-up SMS"
++            } else {
++                "M-PESA SMS"
+             }
++            BalanceChecker.scheduleAirtimeRefresh(context, refreshReason)
+
+diff --git a/app/src/main/java/com/bingwa/mobile/AutomationService.kt b/app/src/main/java/com/bingwa/mobile/AutomationService.kt
+index 8dc7031..146b05c 100644
+--- a/app/src/main/java/com/bingwa/mobile/AutomationService.kt
++++ b/app/src/main/java/com/bingwa/mobile/AutomationService.kt
+@@ -385,6 +385,7 @@ class AutomationService : Service() {
+                 "USSD Signature Learning",
+                 "USSD signature learning finished, but the offer could not be identified for saving."
+             )
++            schedulePostExecutionAirtimeRefresh()
+             stopSelf()
+             return
+         }
+@@ -394,6 +395,7 @@ class AutomationService : Service() {
+                 "USSD Signature Learning",
+                 "The system could not learn a signature for $offerLabel. Open the offer and run Save & Learn again while the USSD menu is available."
+             )
++            schedulePostExecutionAirtimeRefresh()
+             stopSelf()
+             return
+         }
+@@ -432,6 +434,7 @@ class AutomationService : Service() {
+                 .setPackage(packageName)
+                 .putExtra("offerId", request.offerId)
+         )
++        schedulePostExecutionAirtimeRefresh()
+         stopSelf()
+     }
+@@ -462,6 +465,13 @@ class AutomationService : Service() {
+         }
+     }
++
++    private fun schedulePostExecutionAirtimeRefresh() {
++        BalanceChecker.scheduleAirtimeRefresh(
++            context = this,
++            reason = "USSD execution"
++        )
++    }
+@@ -478,6 +488,7 @@ class AutomationService : Service() {
+             Log.d(TAG, "Token purchase callback: success=$success")
+             cb(success)
+             UssdNavigationService.tokenPurchaseCallback = null
++            schedulePostExecutionAirtimeRefresh()
+             stopSelf()
+             return
+         }
+@@ -492,6 +503,7 @@ class AutomationService : Service() {
+         if (request.txId < 0) {
++            schedulePostExecutionAirtimeRefresh()
+             stopSelf()
+             return
+         }
+@@ -501,6 +513,7 @@ class AutomationService : Service() {
+         if (shouldRetryRetriableFinalResponse(status, response)) {
+             handleRetriableFinalResponse(request, response, status, transcript)
++            schedulePostExecutionAirtimeRefresh()
+             stopSelf()
+             return
+         }
+@@ -517,6 +530,7 @@ class AutomationService : Service() {
+             "Failed" -> handleFailedWithFallback(request, response)
+             else -> Unit
+         }
++        schedulePostExecutionAirtimeRefresh()
+         stopSelf()
+     }

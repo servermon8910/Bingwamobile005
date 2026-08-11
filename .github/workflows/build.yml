@@ -1,0 +1,121 @@
+name: Build Bingwa APK
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: "Upload APK to a GitHub Release"
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: "Optional override for the release tag (defaults to the app version)"
+        required: false
+        default: ""
+        type: string
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SHOULD_PUBLISH_RELEASE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release metadata
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          APP_VERSION="$(sed -n 's/.*versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -n 1)"
+          if [ -z "$APP_VERSION" ]; then
+            echo "Unable to determine app version from app/build.gradle.kts" >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${INPUT_RELEASE_TAG:-}" && "${INPUT_RELEASE_TAG}" != "nightly" ]]; then
+            RELEASE_TAG="${INPUT_RELEASE_TAG}"
+          else
+            RELEASE_TAG="v${APP_VERSION}"
+          fi
+
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG}" >> "$GITHUB_ENV"
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+      - name: Prepare release keystore
+        if: env.SHOULD_PUBLISH_RELEASE == 'true'
+        env:
+          BINGWA_UPLOAD_KEYSTORE_BASE64: ${{ secrets.BINGWA_UPLOAD_KEYSTORE_BASE64 }}
+          BINGWA_UPLOAD_STORE_PASSWORD: ${{ secrets.BINGWA_UPLOAD_STORE_PASSWORD }}
+          BINGWA_UPLOAD_KEY_ALIAS: ${{ secrets.BINGWA_UPLOAD_KEY_ALIAS }}
+          BINGWA_UPLOAD_KEY_PASSWORD: ${{ secrets.BINGWA_UPLOAD_KEY_PASSWORD }}
+        run: |
+          if [ -n "$BINGWA_UPLOAD_KEYSTORE_BASE64" ] && [ -n "$BINGWA_UPLOAD_STORE_PASSWORD" ] && [ -n "$BINGWA_UPLOAD_KEY_ALIAS" ] && [ -n "$BINGWA_UPLOAD_KEY_PASSWORD" ]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/bingwa-upload.keystore"
+            echo "$BINGWA_UPLOAD_KEYSTORE_BASE64" | openssl base64 -A -d > "$KEYSTORE_PATH"
+
+            STORE_TYPE=""
+            if keytool -list -keystore "$KEYSTORE_PATH" -storepass "$BINGWA_UPLOAD_STORE_PASSWORD" -storetype PKCS12 >/dev/null 2>&1; then
+              STORE_TYPE="PKCS12"
+            elif keytool -list -keystore "$KEYSTORE_PATH" -storepass "$BINGWA_UPLOAD_STORE_PASSWORD" -storetype JKS >/dev/null 2>&1; then
+              STORE_TYPE="JKS"
+            else
+              echo "Unable to open uploaded keystore with PKCS12 or JKS; falling back to debug signing." >&2
+              STORE_TYPE=""
+            fi
+
+            if [ -n "$STORE_TYPE" ] && ! keytool -list -keystore "$KEYSTORE_PATH" -storepass "$BINGWA_UPLOAD_STORE_PASSWORD" -storetype "$STORE_TYPE" -alias "$BINGWA_UPLOAD_KEY_ALIAS" >/dev/null 2>&1; then
+              echo "Alias '$BINGWA_UPLOAD_KEY_ALIAS' was not found in the uploaded keystore; falling back to debug signing." >&2
+              STORE_TYPE=""
+            fi
+
+            if [ -n "$STORE_TYPE" ]; then
+              {
+                echo "BINGWA_UPLOAD_STORE_FILE=$KEYSTORE_PATH"
+                echo "BINGWA_UPLOAD_STORE_PASSWORD=$BINGWA_UPLOAD_STORE_PASSWORD"
+                echo "BINGWA_UPLOAD_STORE_TYPE=$STORE_TYPE"
+                echo "BINGWA_UPLOAD_KEY_ALIAS=$BINGWA_UPLOAD_KEY_ALIAS"
+                echo "BINGWA_UPLOAD_KEY_PASSWORD=$BINGWA_UPLOAD_KEY_PASSWORD"
+              } >> "$GITHUB_ENV"
+            else
+              echo "Release signing secrets not configured or invalid; Gradle will use the debug signing fallback."
+            fi
+          else
+            echo "Release signing secrets not configured; Gradle will use the debug signing fallback."
+          fi
+      - name: Build release APK
+        env:
+          BINGWA_UPLOAD_STORE_FILE: ${{ env.BINGWA_UPLOAD_STORE_FILE }}
+          BINGWA_UPLOAD_STORE_PASSWORD: ${{ env.BINGWA_UPLOAD_STORE_PASSWORD }}
+          BINGWA_UPLOAD_STORE_TYPE: ${{ env.BINGWA_UPLOAD_STORE_TYPE }}
+          BINGWA_UPLOAD_KEY_ALIAS: ${{ env.BINGWA_UPLOAD_KEY_ALIAS }}
+          BINGWA_UPLOAD_KEY_PASSWORD: ${{ env.BINGWA_UPLOAD_KEY_PASSWORD }}
+        run: ./gradlew --stacktrace :app:assembleRelease
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bingwa-mobile-${{ env.APP_VERSION }}
+          path: app/build/outputs/apk/release/app-release.apk
+      - name: Publish APK to Release
+        if: env.SHOULD_PUBLISH_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
+          prerelease: ${{ github.ref == 'refs/heads/main' }}
+          overwrite_files: true
+          files: app/build/outputs/apk/release/app-release.apk

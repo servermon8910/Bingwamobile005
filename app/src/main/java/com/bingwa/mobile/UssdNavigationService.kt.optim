@@ -1,0 +1,27 @@
+// OPTIMIZED TIMING CONSTANTS FOR ULTRA-FAST EXECUTION
+// Place these at the top of UssdNavigationService companion object
+
+private const val STEP_DELAY_MS = 30L  // was 90L - 67% faster step transitions
+private const val EVENT_HOT_POLL_MS = 2L  // was 8L - faster event detection
+private const val FAST_VERIFY_POLL_MS = 2L  // was 8L - rapid verification
+private const val HOT_SEND_RETRY_DELAY_MS = 3L  // was 8L - quicker retries
+private const val SEND_RETRY_DELAY_MS = 4L  // was 14L - aggressive retry
+private const val POST_WRITE_VERIFY_POLL_MS = 1L  // was 4L - immediate verification
+private const val POST_WRITE_SEND_RETRY_MS = 2L  // was 6L - faster send
+private const val VERIFY_POLL_MS = 4L  // was 14L - aggressive polling
+private const val RAPID_POST_POPUP_POLL_MS = 2L  // was 6L - ultra-fast popup detection
+private const val RAPID_POST_POPUP_VERIFY_MS = 1L  // was 4L - immediate verify
+private const val RAPID_POST_POPUP_SEND_RETRY_MS = 2L  // was 8L - instant retry
+private const val POPUP_STABILITY_DELAY_MS = 2L  // was 8L - minimal wait
+private const val TAP_GESTURE_DURATION_MS = 10L  // was 20L - faster taps
+private const val GESTURE_SETTLE_MS = 4L  // was 12L - quicker settle
+private const val POST_GESTURE_WAIT_MS = 2L  // was 8L - minimal post-gesture wait
+private const val PENDING_ADVANCE_TIMEOUT_MS = 3_000L  // was 7_500L - aggressive timeout
+private const val PENDING_ADVANCE_KICK_MS = 4L  // was 16L - instant kick
+private const val PENDING_STEP_ADVANCE_TIMEOUT_MS = 2_000L  // was 6_000L - faster timeout
+private const val ROOT_REACQUIRE_RETRY_DELAY_MS = 6L  // was 24L - instant retry
+private const val DIALOG_DISMISS_SETTLE_MS = 20L  // was 80L - faster dismiss
+private const val UI_KEEP_VISIBLE_INTERVAL_MS = 500L  // was 1_500L - aggressive keep-alive
+private const val MAX_VERIFY_ATTEMPTS = 10  // was 24 - fewer attempts needed
+private const val MAX_SEND_ATTEMPTS = 5  // was 10 - fewer retries
+private const val REDIAL_COOLDOWN_MS = 200L  // was 550L - faster redial

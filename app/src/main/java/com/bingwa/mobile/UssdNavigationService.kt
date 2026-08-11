@@ -1102,17 +1102,17 @@ class UssdNavigationService : AccessibilityService() {
                     }
 
                     if (!isFinalLearningStep(currentStep)) {
-                        if (tryImmediateVerifiedSend(root, inputField, valueToEnter, skipVerification = true)) {
-                            markStepAction(dialogText, root, snapshot)
-                            startPendingStepAdvance(root, dialogText)
-                            return
-                        }
-                        if (tryAggressiveImmediateSubmit(root, inputField, valueToEnter, skipVerification = true)) {
-                            markStepAction(dialogText, root, snapshot)
-                            startPendingStepAdvance(root, dialogText)
-                            return
-                        }
                         val verified = verifyExpectedInput(root, valueToEnter, inputField) || hasRecentVerifiedInput(valueToEnter)
+                        if (verified && tryImmediateVerifiedSend(root, inputField, valueToEnter)) {
+                            markStepAction(dialogText, root, snapshot)
+                            startPendingStepAdvance(root, dialogText)
+                            return
+                        }
+                        if (verified && tryAggressiveImmediateSubmit(root, inputField, valueToEnter)) {
+                            markStepAction(dialogText, root, snapshot)
+                            startPendingStepAdvance(root, dialogText)
+                            return
+                        }
                         if (verified && tryDirectImeSubmit(root, inputField, valueToEnter)) {
                             markStepAction(dialogText, root, snapshot)
                             startPendingStepAdvance(root, dialogText)
@@ -4031,16 +4031,16 @@ class UssdNavigationService : AccessibilityService() {
     private val NETWORK_DELAY_STEP_ADVANCE_TIMEOUT_MS = 22000L
     private val NETWORK_DELAY_ACTION_GRACE_MS = 28000L
     private val FROZEN_POPUP_WATCHDOG_INTERVAL_MS = 1500L
-    private val PENDING_STEP_ADVANCE_KICK_MS = 180L
-    private val VERIFY_POLL_MS = 180L
-    private val RAPID_POST_POPUP_POLL_MS = 180L
-    private val RAPID_POST_POPUP_VERIFY_MS = 120L
-    private val RAPID_POST_POPUP_SEND_RETRY_MS = 180L
+    private val PENDING_STEP_ADVANCE_KICK_MS = 120L
+    private val VERIFY_POLL_MS = 120L
+    private val RAPID_POST_POPUP_POLL_MS = 120L
+    private val RAPID_POST_POPUP_VERIFY_MS = 90L
+    private val RAPID_POST_POPUP_SEND_RETRY_MS = 120L
     private val MAX_VERIFY_ATTEMPTS = 3
     private val MAX_SEND_ATTEMPTS = 2
     private val FORCEFUL_WRITE_PASSES = 3
     private val WRITE_VERIFICATION_PASSES = 3
-    private val WRITE_VERIFICATION_SETTLE_MS = 80L
+    private val WRITE_VERIFICATION_SETTLE_MS = 40L
     private val DIRECT_WRITE_VERIFY_PASSES = 2
     private val SET_TEXT_BURST_ATTEMPTS = 2
     private val PASTE_BURST_ATTEMPTS = 1
@@ -4076,9 +4076,9 @@ class UssdNavigationService : AccessibilityService() {
     private val CHAR_GESTURE_DURATION_MS = 30L
     private val CHAR_GESTURE_SPREAD_X = 22
     private val CHAR_GESTURE_SPREAD_Y = 22
-    private val TAP_GESTURE_RETRY_SETTLE_MS = 140L
-    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 120L
-    private val RESTART_FROM_ROOT_DELAY_MS = 200L
+    private val TAP_GESTURE_RETRY_SETTLE_MS = 70L
+    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 60L
+    private val RESTART_FROM_ROOT_DELAY_MS = 140L
     private val STEP_TRANSITION_GUARD_MS = 50L
     private val MAX_RETRY_WINDOW_MS = 180000L
     private val MIN_SIM_CHOOSER_SCORE = 260

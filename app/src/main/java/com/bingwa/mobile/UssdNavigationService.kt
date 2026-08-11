@@ -3287,6 +3287,7 @@ class UssdNavigationService : AccessibilityService() {
         hideOverlay()
         onDispatchComplete = null
         tokenPurchaseCallback = null
+        balanceCallback = null
         adjustedStepInputs.clear()
         learnedSignatureSteps.clear()
         learningCaptures.clear()
@@ -4006,15 +4007,15 @@ class UssdNavigationService : AccessibilityService() {
     )
 
     // Timeouts (ms)
-    private val STEP_DELAY_MS = 0L
-    private val EVENT_HOT_POLL_MS = 0L
+    private val STEP_DELAY_MS = 120L
+    private val EVENT_HOT_POLL_MS = 80L
     private val ACCESSIBILITY_NOTIFICATION_TIMEOUT_MS = 300L
     private val DUPLICATE_EVENT_WINDOW_MS = 30L
-    private val FAST_VERIFY_POLL_MS = 0L
-    private val HOT_SEND_RETRY_DELAY_MS = 0L
-    private val SEND_RETRY_DELAY_MS = 0L
-    private val POST_WRITE_VERIFY_POLL_MS = 0L
-    private val POST_WRITE_SEND_RETRY_MS = 0L
+    private val FAST_VERIFY_POLL_MS = 120L
+    private val HOT_SEND_RETRY_DELAY_MS = 180L
+    private val SEND_RETRY_DELAY_MS = 220L
+    private val POST_WRITE_VERIFY_POLL_MS = 120L
+    private val POST_WRITE_SEND_RETRY_MS = 180L
     private val STEP_TIMEOUT_MS = 10000L
     private val STARTUP_STEP_TIMEOUT_MS = 14000L
     private val FINAL_RESPONSE_TIMEOUT_MS = 10000L
@@ -4030,16 +4031,16 @@ class UssdNavigationService : AccessibilityService() {
     private val NETWORK_DELAY_STEP_ADVANCE_TIMEOUT_MS = 22000L
     private val NETWORK_DELAY_ACTION_GRACE_MS = 28000L
     private val FROZEN_POPUP_WATCHDOG_INTERVAL_MS = 1500L
-    private val PENDING_STEP_ADVANCE_KICK_MS = 0L
-    private val VERIFY_POLL_MS = 0L
-    private val RAPID_POST_POPUP_POLL_MS = 0L
-    private val RAPID_POST_POPUP_VERIFY_MS = 0L
-    private val RAPID_POST_POPUP_SEND_RETRY_MS = 0L
+    private val PENDING_STEP_ADVANCE_KICK_MS = 180L
+    private val VERIFY_POLL_MS = 180L
+    private val RAPID_POST_POPUP_POLL_MS = 180L
+    private val RAPID_POST_POPUP_VERIFY_MS = 120L
+    private val RAPID_POST_POPUP_SEND_RETRY_MS = 180L
     private val MAX_VERIFY_ATTEMPTS = 3
     private val MAX_SEND_ATTEMPTS = 2
     private val FORCEFUL_WRITE_PASSES = 3
     private val WRITE_VERIFICATION_PASSES = 3
-    private val WRITE_VERIFICATION_SETTLE_MS = 0L
+    private val WRITE_VERIFICATION_SETTLE_MS = 80L
     private val DIRECT_WRITE_VERIFY_PASSES = 2
     private val SET_TEXT_BURST_ATTEMPTS = 2
     private val PASTE_BURST_ATTEMPTS = 1
@@ -4052,31 +4053,31 @@ class UssdNavigationService : AccessibilityService() {
     private val RECENT_VERIFIED_INPUT_GRACE_MS = 1000L
     private val RECENT_UI_EVENT_GRACE_MS = 150L
     private val RECENT_USSD_CONTEXT_WINDOW_MS = 750L
-    private val GESTURE_SETTLE_MS = 0L
-    private val POST_GESTURE_WAIT_MS = 0L
-    private val POST_WRITE_VERIFY_DELAY_MS = 0L
-    private val FAST_POPUP_STABILITY_DELAY_MS = 0L
-    private val POPUP_STABILITY_DELAY_MS = 0L
-    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 0L
-    private val STARTUP_POPUP_STABILITY_DELAY_MS = 0L
-    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 0L
-    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 0L
-    private val SIM_CHOOSER_SETTLE_MS = 0L
-    private val INTERMEDIATE_POPUP_SETTLE_MS = 0L
+    private val GESTURE_SETTLE_MS = 80L
+    private val POST_GESTURE_WAIT_MS = 120L
+    private val POST_WRITE_VERIFY_DELAY_MS = 120L
+    private val FAST_POPUP_STABILITY_DELAY_MS = 240L
+    private val POPUP_STABILITY_DELAY_MS = 320L
+    private val STARTUP_FAST_POPUP_STABILITY_DELAY_MS = 350L
+    private val STARTUP_POPUP_STABILITY_DELAY_MS = 500L
+    private val WEAK_NETWORK_FAST_POPUP_STABILITY_DELAY_MS = 420L
+    private val WEAK_NETWORK_POPUP_STABILITY_DELAY_MS = 650L
+    private val SIM_CHOOSER_SETTLE_MS = 220L
+    private val INTERMEDIATE_POPUP_SETTLE_MS = 220L
     private val TAP_GESTURE_DURATION_MS = 80L
     private val REDIAL_COOLDOWN_MS = 300L
-    private val PENDING_ADVANCE_KICK_MS = 0L
-    private val DIALOG_DISMISS_SETTLE_MS = 0L
-    private val BACK_ACTION_RETRY_DELAY_MS = 0L
-    private val UI_KEEP_VISIBLE_INTERVAL_MS = 0L
-    private val STARTUP_UI_KEEP_VISIBLE_MS = 0L
-    private val PRIME_TARGET_SETTLE_MS = 0L
+    private val PENDING_ADVANCE_KICK_MS = 180L
+    private val DIALOG_DISMISS_SETTLE_MS = 220L
+    private val BACK_ACTION_RETRY_DELAY_MS = 180L
+    private val UI_KEEP_VISIBLE_INTERVAL_MS = 1400L
+    private val STARTUP_UI_KEEP_VISIBLE_MS = 3500L
+    private val PRIME_TARGET_SETTLE_MS = 120L
     private val CHAR_GESTURE_STAGGER_MS = 20L
     private val CHAR_GESTURE_DURATION_MS = 30L
     private val CHAR_GESTURE_SPREAD_X = 22
     private val CHAR_GESTURE_SPREAD_Y = 22
-    private val TAP_GESTURE_RETRY_SETTLE_MS = 0L
-    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 0L
+    private val TAP_GESTURE_RETRY_SETTLE_MS = 140L
+    private val SETTLE_BETWEEN_WRITE_PASSES_MS = 120L
     private val RESTART_FROM_ROOT_DELAY_MS = 200L
     private val STEP_TRANSITION_GUARD_MS = 50L
     private val MAX_RETRY_WINDOW_MS = 180000L

@@ -1102,18 +1102,17 @@ class UssdNavigationService : AccessibilityService() {
                     }
 
                     if (!isFinalLearningStep(currentStep)) {
-                        val verified = verifyExpectedInput(root, valueToEnter, inputField) || hasRecentVerifiedInput(valueToEnter)
-                        if (verified && tryImmediateVerifiedSend(root, inputField, valueToEnter)) {
+                        if (tryImmediateVerifiedSend(root, inputField, valueToEnter, skipVerification = true)) {
                             markStepAction(dialogText, root, snapshot)
                             startPendingStepAdvance(root, dialogText)
                             return
                         }
-                        if (verified && tryAggressiveImmediateSubmit(root, inputField, valueToEnter)) {
+                        if (tryAggressiveImmediateSubmit(root, inputField, valueToEnter, skipVerification = true)) {
                             markStepAction(dialogText, root, snapshot)
                             startPendingStepAdvance(root, dialogText)
                             return
                         }
-                        if (verified && tryDirectImeSubmit(root, inputField, valueToEnter)) {
+                        if (tryDirectImeSubmit(root, inputField, valueToEnter)) {
                             markStepAction(dialogText, root, snapshot)
                             startPendingStepAdvance(root, dialogText)
                             return
@@ -1364,13 +1363,6 @@ class UssdNavigationService : AccessibilityService() {
             val lower = dialogText.lowercase()
             val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
-                val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (looksReady && !hasError) {
-                    clearPendingStepAdvance()
-                    advanceStep()
-                    scheduleProcessStep(true)
-                    return true
-                }
                 schedulePendingStepAdvanceKick()
                 return true
             }
@@ -1433,14 +1425,7 @@ class UssdNavigationService : AccessibilityService() {
             val lower = dialogText.lowercase()
             val hasError = errorKeywords.any { lower.contains(it) }
             if (currentKey == fromKey) {
-                val looksReady = snapshot?.hasEditableField == true || snapshot?.hasSendButton == true
-                if (looksReady && !hasError) {
-                    clearPendingStepAdvance()
-                    advanceStep()
-                    scheduleProcessStep(true)
-                } else {
-                    schedulePendingStepAdvanceKick()
-                }
+                schedulePendingStepAdvanceKick()
                 isProcessing = false
                 return
             }
@@ -1634,14 +1619,18 @@ class UssdNavigationService : AccessibilityService() {
 
     private fun setTextOnNode(node: AccessibilityNodeInfo, value: String): Boolean {
         if (value.isBlank() || !supportsAction(node, AccessibilityNodeInfo.ACTION_SET_TEXT)) return false
-        refocusInputTarget(node)
-        activateInputTarget(node)
-        return runCatching {
+        runCatching {
             node.performAction(
                 AccessibilityNodeInfo.ACTION_SET_TEXT,
-                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
             )
-        }.getOrDefault(false)
+        }
+        return runCatching {
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_TEXT,
+                    Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) }
+                )
+            }.getOrDefault(false)
     }
 
     private fun reinforceTextWrite(node: AccessibilityNodeInfo, value: String): Boolean {
@@ -1650,6 +1639,12 @@ class UssdNavigationService : AccessibilityService() {
             if (attempt > 0) {
                 primeInputTarget(node, true)
                 refreshInputTarget(node)
+                runCatching {
+                    node.performAction(
+                        AccessibilityNodeInfo.ACTION_SET_TEXT,
+                        Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "") }
+                    )
+                }
             }
             if (runCatching {
                     node.performAction(
@@ -2814,13 +2809,13 @@ class UssdNavigationService : AccessibilityService() {
         if (currentStep >= advancedSteps.size) return false
         if (!hasSeenAdvancedPopup) return false
         val dialogStateFresh = lastObservedDialogStateChangedElapsed > 0L &&
-            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed <= 3000L
+            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed <= 5000L
         if (dialogStateFresh) return false
         if (!isProcessing && !hasRecentUssdUiEvent()) return false
         val staleProgress = lastProgressElapsed > 0L &&
-            SystemClock.elapsedRealtime() - lastProgressElapsed > 4000L
+            SystemClock.elapsedRealtime() - lastProgressElapsed > 6000L
         val staleDialog = lastObservedDialogStateChangedElapsed > 0L &&
-            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed > 5000L
+            SystemClock.elapsedRealtime() - lastObservedDialogStateChangedElapsed > 7000L
         return staleProgress || staleDialog
     }
 
